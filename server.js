@@ -1,0 +1,669 @@
+// Import express and dependencies
+import express from 'express';
+import crypto from 'crypto';
+import { supabaseAdmin } from './db.js';
+import { generateS3UploadUrl } from './s3.js';
+import { google } from 'googleapis';
+import dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
+
+// Create an instance of express
+const app = express();
+app.use(express.json());
+
+// Configuration
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+const SCOPES = [
+  'https://www.googleapis.com/auth/youtube.readonly',
+  'https://www.googleapis.com/auth/yt-analytics.readonly'
+];
+
+// In-memory OAuth state store with auto-cleanup (TTL: 10 minutes)
+const oauthStates = new Map();
+
+function generateState(userId) {
+  const state = crypto.randomUUID();
+  oauthStates.set(state, { userId, createdAt: Date.now() });
+  setTimeout(() => oauthStates.delete(state), 10 * 60 * 1000);
+  return state;
+}
+
+function validateState(state) {
+  const data = oauthStates.get(state);
+  if (!data) return null;
+  oauthStates.delete(state);
+  if (Date.now() - data.createdAt > 10 * 60 * 1000) return null;
+  return data.userId;
+}
+
+function getOAuth2Client() {
+  return new google.auth.OAuth2(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    `http://localhost:8000/api/youtube/callback`
+  );
+}
+
+// Helper: check if analytics cache is stale (older than 24 hours)
+function isAnalyticsStale(analyticsUpdatedAt) {
+  if (!analyticsUpdatedAt) return true;
+  const twentyFourHours = 24 * 60 * 60 * 1000;
+  return Date.now() - new Date(analyticsUpdatedAt).getTime() > twentyFourHours;
+}
+
+// Helper: refresh access token if expired
+async function refreshTokenIfNeeded(connection) {
+  if (!connection.token_expires_at) return connection;
+
+  const expiresAt = new Date(connection.token_expires_at).getTime();
+  if (expiresAt > Date.now()) return connection; // Still valid
+
+  console.log('[TOKEN_REFRESH] Token expired, refreshing for user:', connection.user_id);
+  try {
+    const oauth2Client = getOAuth2Client();
+    oauth2Client.setCredentials({
+      access_token: connection.access_token,
+      refresh_token: connection.refresh_token,
+    });
+
+    const { credentials } = await oauth2Client.refreshAccessToken();
+
+    // Update tokens in Supabase
+    const { error } = await supabaseAdmin
+      .from('youtube_connections')
+      .update({
+        access_token: credentials.access_token,
+        token_expires_at: credentials.expiry_date
+          ? new Date(credentials.expiry_date).toISOString()
+          : null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', connection.user_id);
+
+    if (error) {
+      console.error('[TOKEN_REFRESH] Failed to update tokens in DB:', error.message);
+      throw error;
+    }
+
+    console.log('[TOKEN_REFRESH] Token refreshed successfully');
+    return {
+      ...connection,
+      access_token: credentials.access_token,
+      token_expires_at: credentials.expiry_date
+        ? new Date(credentials.expiry_date).toISOString()
+        : connection.token_expires_at,
+    };
+  } catch (err) {
+    console.error('[TOKEN_REFRESH] Error refreshing token:', err.message);
+    throw err;
+  }
+}
+
+// Helper: fetch fresh analytics from YouTube APIs
+async function fetchFreshAnalytics(connection) {
+  const oauth2Client = getOAuth2Client();
+  oauth2Client.setCredentials({
+    access_token: connection.access_token,
+    refresh_token: connection.refresh_token,
+  });
+
+  const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+  const youtubeAnalytics = google.youtubeAnalytics({ version: 'v2', auth: oauth2Client });
+
+  // Fetch channel statistics
+  const channelResponse = await youtube.channels.list({
+    part: 'statistics,snippet',
+    mine: true,
+  });
+
+  const channel = channelResponse.data.items?.[0];
+  if (!channel) throw new Error('Channel not found');
+
+  const stats = channel.statistics;
+  const endDate = new Date().toISOString().split('T')[0];
+  const startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+  const analyticsData = {
+    views_trend: [],
+    audience_age: [],
+    audience_gender: { male: 0, female: 0 },
+    audience_regions: [],
+    traffic_sources: [],
+    device_breakdown: [],
+  };
+
+  // Fetch views trend (last 30 days)
+  try {
+    const viewsResponse = await youtubeAnalytics.reports.query({
+      ids: 'channel==MINE',
+      startDate,
+      endDate,
+      metrics: 'views,subscribersGained,estimatedMinutesWatched',
+      dimensions: 'day',
+      sort: 'day',
+    });
+    console.log('[ANALYTICS] === VIEWS TREND RAW ===');
+    console.log('[ANALYTICS] columnHeaders:', JSON.stringify(viewsResponse.data.columnHeaders));
+    console.log('[ANALYTICS] rows count:', viewsResponse.data.rows?.length || 0);
+    console.log('[ANALYTICS] first 3 rows:', JSON.stringify(viewsResponse.data.rows?.slice(0, 3)));
+    if (viewsResponse.data.rows) {
+      analyticsData.views_trend = viewsResponse.data.rows.map(row => ({
+        date: row[0].slice(5),
+        views: row[1],
+        subscribers: row[2],
+        watchTime: row[3],
+      }));
+    }
+  } catch (err) {
+    console.warn('[ANALYTICS] Views trend failed:', err.message);
+  }
+
+  // Fetch audience regions
+  try {
+    const regionResponse = await youtubeAnalytics.reports.query({
+      ids: 'channel==MINE',
+      startDate,
+      endDate,
+      metrics: 'views',
+      dimensions: 'country',
+      sort: '-views',
+      maxResults: 10,
+    });
+    console.log('[ANALYTICS] === AUDIENCE REGIONS RAW ===');
+    console.log('[ANALYTICS] columnHeaders:', JSON.stringify(regionResponse.data.columnHeaders));
+    console.log('[ANALYTICS] rows:', JSON.stringify(regionResponse.data.rows));
+    console.log('[ANALYTICS] rows count:', regionResponse.data.rows?.length || 0);
+    if (regionResponse.data.rows) {
+      const totalViews = regionResponse.data.rows.reduce((sum, r) => sum + r[1], 0);
+      analyticsData.audience_regions = regionResponse.data.rows.map(row => ({
+        name: row[0],
+        value: totalViews > 0 ? parseFloat(((row[1] / totalViews) * 100).toFixed(1)) : 0,
+      }));
+      console.log('[ANALYTICS] Parsed regions:', JSON.stringify(analyticsData.audience_regions));
+    } else {
+      console.log('[ANALYTICS] No region rows returned!');
+    }
+  } catch (err) {
+    console.warn('[ANALYTICS] Audience region FAILED:', err.message);
+    console.warn('[ANALYTICS] Region error details:', err.response?.data || err.errors || err);
+  }
+
+  // Fetch audience age
+  try {
+    const ageResponse = await youtubeAnalytics.reports.query({
+      ids: 'channel==MINE',
+      startDate,
+      endDate,
+      metrics: 'viewerPercentage',
+      dimensions: 'ageGroup',
+      sort: 'ageGroup',
+    });
+    console.log('[ANALYTICS] === AUDIENCE AGE RAW ===');
+    console.log('[ANALYTICS] columnHeaders:', JSON.stringify(ageResponse.data.columnHeaders));
+    console.log('[ANALYTICS] rows:', JSON.stringify(ageResponse.data.rows));
+    console.log('[ANALYTICS] rows count:', ageResponse.data.rows?.length || 0);
+    if (ageResponse.data.rows) {
+      analyticsData.audience_age = ageResponse.data.rows.map(row => ({
+        name: row[0].replace('age', ''),
+        value: parseFloat(row[1].toFixed(1)),
+      }));
+      console.log('[ANALYTICS] Parsed age:', JSON.stringify(analyticsData.audience_age));
+    } else {
+      console.log('[ANALYTICS] No age rows returned!');
+    }
+  } catch (err) {
+    console.warn('[ANALYTICS] Audience age FAILED:', err.message);
+    console.warn('[ANALYTICS] Age error details:', err.response?.data || err.errors || err);
+  }
+
+  // Fetch audience gender
+  try {
+    const genderResponse = await youtubeAnalytics.reports.query({
+      ids: 'channel==MINE',
+      startDate,
+      endDate,
+      metrics: 'viewerPercentage',
+      dimensions: 'gender',
+    });
+    console.log('[ANALYTICS] === AUDIENCE GENDER RAW ===');
+    console.log('[ANALYTICS] columnHeaders:', JSON.stringify(genderResponse.data.columnHeaders));
+    console.log('[ANALYTICS] rows:', JSON.stringify(genderResponse.data.rows));
+    console.log('[ANALYTICS] rows count:', genderResponse.data.rows?.length || 0);
+    if (genderResponse.data.rows) {
+      genderResponse.data.rows.forEach(row => {
+        if (row[0] === 'male') analyticsData.audience_gender.male = parseFloat(row[1].toFixed(1));
+        if (row[0] === 'female') analyticsData.audience_gender.female = parseFloat(row[1].toFixed(1));
+      });
+      console.log('[ANALYTICS] Parsed gender:', JSON.stringify(analyticsData.audience_gender));
+    } else {
+      console.log('[ANALYTICS] No gender rows returned!');
+    }
+  } catch (err) {
+    console.warn('[ANALYTICS] Audience gender FAILED:', err.message);
+    console.warn('[ANALYTICS] Gender error details:', err.response?.data || err.errors || err);
+  }
+
+  // Fetch traffic sources
+  try {
+    const trafficResponse = await youtubeAnalytics.reports.query({
+      ids: 'channel==MINE',
+      startDate,
+      endDate,
+      metrics: 'views',
+      dimensions: 'insightTrafficSourceType',
+      sort: '-views',
+      maxResults: 8,
+    });
+    console.log('[ANALYTICS] === TRAFFIC SOURCES RAW ===');
+    console.log('[ANALYTICS] rows:', JSON.stringify(trafficResponse.data.rows));
+    console.log('[ANALYTICS] rows count:', trafficResponse.data.rows?.length || 0);
+    if (trafficResponse.data.rows) {
+      const totalViews = trafficResponse.data.rows.reduce((sum, r) => sum + r[1], 0);
+      analyticsData.traffic_sources = trafficResponse.data.rows.map(row => ({
+        name: row[0].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        value: totalViews > 0 ? parseFloat(((row[1] / totalViews) * 100).toFixed(1)) : 0,
+      }));
+      console.log('[ANALYTICS] Parsed traffic:', JSON.stringify(analyticsData.traffic_sources));
+    } else {
+      console.log('[ANALYTICS] No traffic rows returned!');
+    }
+  } catch (err) {
+    console.warn('[ANALYTICS] Traffic sources FAILED:', err.message);
+    console.warn('[ANALYTICS] Traffic error details:', err.response?.data || err.errors || err);
+  }
+
+  // Fetch device types
+  try {
+    const deviceResponse = await youtubeAnalytics.reports.query({
+      ids: 'channel==MINE',
+      startDate,
+      endDate,
+      metrics: 'views',
+      dimensions: 'deviceType',
+      sort: '-views',
+    });
+    console.log('[ANALYTICS] === DEVICE BREAKDOWN RAW ===');
+    console.log('[ANALYTICS] rows:', JSON.stringify(deviceResponse.data.rows));
+    console.log('[ANALYTICS] rows count:', deviceResponse.data.rows?.length || 0);
+    if (deviceResponse.data.rows) {
+      const totalViews = deviceResponse.data.rows.reduce((sum, r) => sum + r[1], 0);
+      analyticsData.device_breakdown = deviceResponse.data.rows.map(row => ({
+        name: row[0].replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+        value: totalViews > 0 ? parseFloat(((row[1] / totalViews) * 100).toFixed(1)) : 0,
+      }));
+      console.log('[ANALYTICS] Parsed devices:', JSON.stringify(analyticsData.device_breakdown));
+    } else {
+      console.log('[ANALYTICS] No device rows returned!');
+    }
+  } catch (err) {
+    console.warn('[ANALYTICS] Device breakdown FAILED:', err.message);
+    console.warn('[ANALYTICS] Device error details:', err.response?.data || err.errors || err);
+  }
+
+  // === FINAL SUMMARY ===
+  console.log('[ANALYTICS] ==========================================');
+  console.log('[ANALYTICS] FINAL ANALYTICS SUMMARY:');
+  console.log('[ANALYTICS] views_trend count:', analyticsData.views_trend.length);
+  console.log('[ANALYTICS] audience_regions:', JSON.stringify(analyticsData.audience_regions));
+  console.log('[ANALYTICS] audience_age:', JSON.stringify(analyticsData.audience_age));
+  console.log('[ANALYTICS] audience_gender:', JSON.stringify(analyticsData.audience_gender));
+  console.log('[ANALYTICS] traffic_sources:', JSON.stringify(analyticsData.traffic_sources));
+  console.log('[ANALYTICS] device_breakdown:', JSON.stringify(analyticsData.device_breakdown));
+  console.log('[ANALYTICS] ==========================================');
+
+  // Update the youtube_connections row with fresh data
+  const updatePayload = {
+    subscriber_count: parseInt(stats.subscriberCount || 0),
+    view_count: parseInt(stats.viewCount || 0),
+    video_count: parseInt(stats.videoCount || 0),
+    channel_title: channel.snippet.title,
+    channel_thumbnail: channel.snippet.thumbnails?.default?.url || '',
+    views_trend: analyticsData.views_trend,
+    audience_age: analyticsData.audience_age,
+    audience_gender: analyticsData.audience_gender,
+    audience_regions: analyticsData.audience_regions,
+    traffic_sources: analyticsData.traffic_sources,
+    device_breakdown: analyticsData.device_breakdown,
+    analytics_updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabaseAdmin
+    .from('youtube_connections')
+    .update(updatePayload)
+    .eq('user_id', connection.user_id);
+
+  if (error) {
+    console.error('[ANALYTICS] Failed to cache analytics:', error.message);
+  }
+
+  return {
+    channel: {
+      id: connection.channel_id,
+      title: channel.snippet.title,
+      thumbnail: channel.snippet.thumbnails?.default?.url || '',
+      subscriber_count: parseInt(stats.subscriberCount || 0),
+      view_count: parseInt(stats.viewCount || 0),
+      video_count: parseInt(stats.videoCount || 0),
+    },
+    analytics: analyticsData,
+    analytics_updated_at: updatePayload.analytics_updated_at,
+  };
+}
+
+// ─── S3 Upload Endpoint ─────────────────────────────────────────────────────
+
+app.post('/api/signUploadUrl', async (req, res) => {
+  console.log('[S3] Received signUploadUrl request:', { userFirstName: req.body.userFirstName, fileName: req.body.fileName });
+
+  const { userFirstName, fileName, fileType } = req.body;
+  let s3_key = `uploads/${userFirstName}/${fileName}`;
+  const uploadUrl = await generateS3UploadUrl(s3_key, fileType);
+
+  if (!uploadUrl) {
+    console.error('[S3] Failed to generate presigned URL for:', s3_key);
+    return res.status(500).json({ error: "Failed to generate URL" });
+  }
+
+  console.log('[S3] Generated presigned URL for:', s3_key);
+  res.json({ "url": uploadUrl, "key": s3_key });
+});
+
+// ─── YouTube OAuth Endpoints ────────────────────────────────────────────────
+
+// Get authorization URL — starts the OAuth flow
+app.get('/api/youtube/auth-url', (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId query parameter is required' });
+  }
+
+  console.log('[YOUTUBE_AUTH] Generating auth URL for user:', userId);
+
+  try {
+    const state = generateState(userId);
+    const oauth2Client = getOAuth2Client();
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: SCOPES,
+      state,
+      prompt: 'consent', // Always show consent to get refresh_token
+    });
+
+    console.log('[YOUTUBE_AUTH] Generated authorization URL with state');
+    res.json({ auth_url: authUrl });
+  } catch (error) {
+    console.error('[YOUTUBE_AUTH] Error generating auth URL:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// OAuth callback — Google redirects here after user consent
+app.get('/api/youtube/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+
+  console.log('[YOUTUBE_CALLBACK] Received callback');
+
+  if (error) {
+    console.error('[YOUTUBE_CALLBACK] OAuth error:', error);
+    return res.redirect(`${FRONTEND_URL}/dashboard?youtube=error`);
+  }
+
+  if (!code || !state) {
+    console.error('[YOUTUBE_CALLBACK] Missing code or state');
+    return res.redirect(`${FRONTEND_URL}/dashboard?youtube=error`);
+  }
+
+  const userId = validateState(state);
+  if (!userId) {
+    console.error('[YOUTUBE_CALLBACK] Invalid or expired state');
+    return res.redirect(`${FRONTEND_URL}/dashboard?youtube=error&reason=invalid_state`);
+  }
+
+  try {
+    const oauth2Client = getOAuth2Client();
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+
+    console.log('[YOUTUBE_CALLBACK] Got tokens for user:', userId);
+
+    // Fetch channel info
+    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    const channelResponse = await youtube.channels.list({
+      part: 'snippet,statistics',
+      mine: true,
+    });
+
+    const channel = channelResponse.data.items?.[0];
+    if (!channel) {
+      console.error('[YOUTUBE_CALLBACK] No channel found');
+      return res.redirect(`${FRONTEND_URL}/profile/${userId}?youtube=error&reason=no_channel`);
+    }
+
+    console.log('[YOUTUBE_CALLBACK] Channel:', channel.snippet.title);
+
+    // UPSERT into youtube_connections
+    const { error: dbError } = await supabaseAdmin
+      .from('youtube_connections')
+      .upsert(
+        {
+          user_id: userId,
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token || null,
+          token_expires_at: tokens.expiry_date
+            ? new Date(tokens.expiry_date).toISOString()
+            : null,
+          channel_id: channel.id,
+          channel_title: channel.snippet.title,
+          channel_description: channel.snippet.description || '',
+          channel_thumbnail: channel.snippet.thumbnails?.default?.url || '',
+          subscriber_count: parseInt(channel.statistics.subscriberCount || 0),
+          view_count: parseInt(channel.statistics.viewCount || 0),
+          video_count: parseInt(channel.statistics.videoCount || 0),
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'user_id' }
+      );
+
+    if (dbError) {
+      console.error('[YOUTUBE_CALLBACK] DB error:', dbError.message);
+      return res.redirect(`${FRONTEND_URL}/profile/${userId}?youtube=error`);
+    }
+
+    console.log('[YOUTUBE_CALLBACK] Stored credentials in Supabase');
+    res.redirect(`${FRONTEND_URL}/profile/${userId}?youtube=connected`);
+  } catch (err) {
+    console.error('[YOUTUBE_CALLBACK] Error:', err.message);
+    res.redirect(`${FRONTEND_URL}/profile/${userId}?youtube=error`);
+  }
+});
+
+// Get YouTube connection status for a user
+app.get('/api/youtube/status', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId query parameter is required' });
+  }
+
+  console.log('[YOUTUBE_STATUS] Checking status for user:', userId);
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('youtube_connections')
+      .select('channel_id, channel_title, channel_thumbnail, subscriber_count, view_count, video_count, created_at')
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !data) {
+      return res.json({ connected: false });
+    }
+
+    res.json({
+      connected: true,
+      channel_id: data.channel_id,
+      channel_title: data.channel_title,
+      channel_thumbnail: data.channel_thumbnail,
+      subscriber_count: data.subscriber_count,
+      view_count: data.view_count,
+      video_count: data.video_count,
+      connected_at: data.created_at,
+    });
+  } catch (err) {
+    console.error('[YOUTUBE_STATUS] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get YouTube analytics — uses 24h cache
+app.get('/api/youtube/analytics', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId query parameter is required' });
+  }
+
+  console.log('[YOUTUBE_ANALYTICS] Fetching analytics for user:', userId);
+
+  try {
+    const { data: connection, error } = await supabaseAdmin
+      .from('youtube_connections')
+      .select('*')
+      .eq('user_id', userId)
+      .single();
+
+    if (error || !connection) {
+      return res.json({ connected: false });
+    }
+
+    // Check if cache is fresh (within 24 hours)
+    if (!isAnalyticsStale(connection.analytics_updated_at)) {
+      console.log('[YOUTUBE_ANALYTICS] Returning cached data (updated:', connection.analytics_updated_at, ')');
+      return res.json({
+        connected: true,
+        channel: {
+          id: connection.channel_id,
+          title: connection.channel_title,
+          thumbnail: connection.channel_thumbnail,
+          subscriber_count: connection.subscriber_count,
+          view_count: connection.view_count,
+          video_count: connection.video_count,
+        },
+        analytics: {
+          views_trend: connection.views_trend || [],
+          audience_age: connection.audience_age || [],
+          audience_gender: connection.audience_gender || { male: 0, female: 0 },
+          audience_regions: connection.audience_regions || [],
+          traffic_sources: connection.traffic_sources || [],
+          device_breakdown: connection.device_breakdown || [],
+        },
+        analytics_updated_at: connection.analytics_updated_at,
+        cached: true,
+      });
+    }
+
+    // Cache is stale — refresh tokens if needed and fetch fresh analytics
+    console.log('[YOUTUBE_ANALYTICS] Cache stale, fetching fresh data...');
+
+    let freshConnection;
+    try {
+      freshConnection = await refreshTokenIfNeeded(connection);
+    } catch (refreshErr) {
+      console.error('[YOUTUBE_ANALYTICS] Token refresh failed:', refreshErr.message);
+      // Return stale cached data if refresh fails
+      return res.json({
+        connected: true,
+        channel: {
+          id: connection.channel_id,
+          title: connection.channel_title,
+          thumbnail: connection.channel_thumbnail,
+          subscriber_count: connection.subscriber_count,
+          view_count: connection.view_count,
+          video_count: connection.video_count,
+        },
+        analytics: {
+          views_trend: connection.views_trend || [],
+          audience_age: connection.audience_age || [],
+          audience_gender: connection.audience_gender || { male: 0, female: 0 },
+          audience_regions: connection.audience_regions || [],
+          traffic_sources: connection.traffic_sources || [],
+          device_breakdown: connection.device_breakdown || [],
+        },
+        analytics_updated_at: connection.analytics_updated_at,
+        cached: true,
+        token_error: true,
+      });
+    }
+
+    const freshData = await fetchFreshAnalytics(freshConnection);
+
+    res.json({
+      connected: true,
+      ...freshData,
+      cached: false,
+    });
+  } catch (err) {
+    console.error('[YOUTUBE_ANALYTICS] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Disconnect YouTube channel
+app.delete('/api/youtube/disconnect', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId query parameter is required' });
+  }
+
+  console.log('[YOUTUBE_DISCONNECT] Disconnecting for user:', userId);
+
+  try {
+    // Load tokens to attempt revocation
+    const { data: connection } = await supabaseAdmin
+      .from('youtube_connections')
+      .select('access_token')
+      .eq('user_id', userId)
+      .single();
+
+    // Best-effort: revoke the token with Google
+    if (connection?.access_token) {
+      try {
+        const oauth2Client = getOAuth2Client();
+        await oauth2Client.revokeToken(connection.access_token);
+        console.log('[YOUTUBE_DISCONNECT] Token revoked with Google');
+      } catch (revokeErr) {
+        console.warn('[YOUTUBE_DISCONNECT] Token revocation failed (non-critical):', revokeErr.message);
+      }
+    }
+
+    // Delete from Supabase
+    const { error } = await supabaseAdmin
+      .from('youtube_connections')
+      .delete()
+      .eq('user_id', userId);
+
+    if (error) throw error;
+
+    console.log('[YOUTUBE_DISCONNECT] Successfully disconnected');
+    res.json({ message: 'Disconnected successfully' });
+  } catch (err) {
+    console.error('[YOUTUBE_DISCONNECT] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Start Server ───────────────────────────────────────────────────────────
+
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => {
+  console.log(`[SERVER] Server is running on port ${PORT}`);
+  console.log(`[SERVER] Frontend URL: ${FRONTEND_URL}`);
+  console.log(`[SERVER] YouTube callback URL: http://localhost:${PORT}/api/youtube/callback`);
+});
