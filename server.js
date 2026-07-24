@@ -659,6 +659,317 @@ app.delete('/api/youtube/disconnect', async (req, res) => {
   }
 });
 
+// ─── Collaboration Request Endpoints ────────────────────────────────────────
+
+// Send a collaboration request
+app.post('/api/collaborations', async (req, res) => {
+  const { senderId, receiverId, projectId, campaignId, message, budget, timeline } = req.body;
+
+  if (!senderId || !receiverId || !message) {
+    return res.status(400).json({ error: 'senderId, receiverId, and message are required' });
+  }
+
+  if (senderId === receiverId) {
+    return res.status(400).json({ error: 'Cannot send a request to yourself' });
+  }
+
+  console.log('[COLLAB] Creating request from', senderId, 'to', receiverId);
+
+  try {
+    // Check for existing pending request
+    const { data: existing } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select('id')
+      .eq('sender_id', senderId)
+      .eq('receiver_id', receiverId)
+      .eq('status', 'pending')
+      .maybeSingle();
+
+    if (existing) {
+      return res.status(409).json({ error: 'You already have a pending request to this user' });
+    }
+
+    const insertPayload = {
+      sender_id: senderId,
+      receiver_id: receiverId,
+      message,
+      budget: budget || null,
+      timeline: timeline || null,
+      status: 'pending',
+    };
+    if (projectId) insertPayload.project_id = projectId;
+    if (campaignId) insertPayload.campaign_id = campaignId;
+
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .insert([insertPayload])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log('[COLLAB] Request created:', data.id);
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('[COLLAB] Error creating request:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get received collaboration requests (inbox)
+app.get('/api/collaborations/inbox', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select(`
+        *,
+        sender:sender_id(id, display_name, avatar, role, email),
+        project:project_id(id, project_name, image),
+        campaign:campaign_id(id, campaign_name, image)
+      `)
+      .eq('receiver_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error('[COLLAB] Error fetching inbox:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get sent collaboration requests
+app.get('/api/collaborations/sent', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select(`
+        *,
+        receiver:receiver_id(id, display_name, avatar, role, email),
+        project:project_id(id, project_name, image),
+        campaign:campaign_id(id, campaign_name, image)
+      `)
+      .eq('sender_id', userId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error('[COLLAB] Error fetching sent:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all accepted collaborations for chat list
+app.get('/api/collaborations/chats', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select(`
+        *,
+        sender:sender_id(id, display_name, avatar, role),
+        receiver:receiver_id(id, display_name, avatar, role),
+        project:project_id(id, project_name, image),
+        campaign:campaign_id(id, campaign_name, image)
+      `)
+      .eq('status', 'accepted')
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .order('updated_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error('[COLLAB] Error fetching chats:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Accept a collaboration request
+app.patch('/api/collaborations/:id/accept', async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    // Verify user is the receiver
+    const { data: request } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select('receiver_id, status')
+      .eq('id', id)
+      .single();
+
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.receiver_id !== userId) return res.status(403).json({ error: 'Not authorized' });
+    if (request.status !== 'pending') return res.status(400).json({ error: 'Request is not pending' });
+
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .update({ status: 'accepted', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log('[COLLAB] Request accepted:', id);
+    res.json(data);
+  } catch (err) {
+    console.error('[COLLAB] Error accepting request:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reject a collaboration request
+app.patch('/api/collaborations/:id/reject', async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    const { data: request } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select('receiver_id, status')
+      .eq('id', id)
+      .single();
+
+    if (!request) return res.status(404).json({ error: 'Request not found' });
+    if (request.receiver_id !== userId) return res.status(403).json({ error: 'Not authorized' });
+    if (request.status !== 'pending') return res.status(400).json({ error: 'Request is not pending' });
+
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .update({ status: 'rejected', updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    console.log('[COLLAB] Request rejected:', id);
+    res.json(data);
+  } catch (err) {
+    console.error('[COLLAB] Error rejecting request:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get chat messages for a collaboration
+app.get('/api/collaborations/:id/messages', async (req, res) => {
+  const { id } = req.params;
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    // Verify user is part of this collaboration and it's accepted
+    const { data: collab } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select('sender_id, receiver_id, status')
+      .eq('id', id)
+      .single();
+
+    if (!collab) return res.status(404).json({ error: 'Collaboration not found' });
+    if (collab.sender_id !== userId && collab.receiver_id !== userId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    if (collab.status !== 'accepted') {
+      return res.status(400).json({ error: 'Collaboration is not accepted' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('chat_messages')
+      .select(`
+        *,
+        sender:sender_id(id, display_name, avatar)
+      `)
+      .eq('collaboration_id', id)
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+
+    res.json(data || []);
+  } catch (err) {
+    console.error('[COLLAB] Error fetching messages:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Send a chat message
+app.post('/api/collaborations/:id/messages', async (req, res) => {
+  const { id } = req.params;
+  const { senderId, content } = req.body;
+
+  if (!senderId || !content) {
+    return res.status(400).json({ error: 'senderId and content are required' });
+  }
+
+  try {
+    // Verify user is part of this collaboration and it's accepted
+    const { data: collab } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select('sender_id, receiver_id, status')
+      .eq('id', id)
+      .single();
+
+    if (!collab) return res.status(404).json({ error: 'Collaboration not found' });
+    if (collab.sender_id !== senderId && collab.receiver_id !== senderId) {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+    if (collab.status !== 'accepted') {
+      return res.status(400).json({ error: 'Collaboration is not accepted' });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from('chat_messages')
+      .insert([{
+        collaboration_id: id,
+        sender_id: senderId,
+        content,
+      }])
+      .select(`
+        *,
+        sender:sender_id(id, display_name, avatar)
+      `)
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json(data);
+  } catch (err) {
+    console.error('[COLLAB] Error sending message:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start Server ───────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 8000;
