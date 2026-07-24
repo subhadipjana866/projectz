@@ -21,7 +21,7 @@ export default function Login() {
   // Redirect if already logged in
   useEffect(() => {
     if (!loading && session) {
-      navigate('/dashboard', { replace: true });
+      navigate('/projects', { replace: true });
     }
   }, [session, loading, navigate]);
 

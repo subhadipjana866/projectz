@@ -24,7 +24,7 @@ export default function VerifyEmail() {
   useEffect(() => {
     if (verified && session) {
       setTimeout(() => {
-        navigate('/dashboard', { replace: true });
+        navigate('/projects', { replace: true });
       }, 1500);
     }
   }, [verified, session, navigate]);
@@ -273,7 +273,7 @@ export default function VerifyEmail() {
                 <span className="text-2xl text-green-400">✓</span>
               </div>
               <p className="text-slate-300">Your email has been verified!</p>
-              <p className="text-sm text-slate-500">Redirecting to dashboard...</p>
+              <p className="text-sm text-slate-500">Redirecting to feed...</p>
             </div>
           )}
         </div>

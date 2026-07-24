@@ -30,7 +30,7 @@ export default function OnboardingRole() {
 
         // If user exists and has completed profile, redirect to dashboard
         if (data && data.role) {
-          navigate('/dashboard');
+          navigate('/projects');
         }
       } catch (err) {
         console.error('Error checking profile status:', err);

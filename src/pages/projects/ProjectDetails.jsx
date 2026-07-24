@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import CapsuleSelector from '../../components/CapsuleSelector';
+import CollaborationModal from '../../components/CollaborationModal';
 
 export default function ProjectDetails() {
   const { projectId } = useParams();
@@ -23,6 +24,7 @@ export default function ProjectDetails() {
     platforms: [],
     imageFile: null
   });
+  const [showCollabModal, setShowCollabModal] = useState(false);
 
   useEffect(() => {
     fetchProjectDetails();
@@ -305,6 +307,17 @@ export default function ProjectDetails() {
                       Edit
                     </button>
                   )}
+                  {!isOwner && user && (
+                    <button
+                      onClick={() => setShowCollabModal(true)}
+                      className="text-sm font-medium text-white bg-[#1152d4] hover:bg-blue-700 px-4 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shadow-lg shadow-blue-500/10"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      Collaborate
+                    </button>
+                  )}
                 </div>
                 <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">
                   {project.project_name || 'Untitled Project'}
@@ -391,6 +404,16 @@ export default function ProjectDetails() {
           </div>
         </div>
       </div>
+
+      {/* Collaboration Modal */}
+      <CollaborationModal
+        isOpen={showCollabModal}
+        onClose={() => setShowCollabModal(false)}
+        receiverId={project?.creators?.user_id}
+        receiverName={null}
+        projectId={project?.id}
+        projectName={project?.project_name}
+      />
     </div>
   );
 }

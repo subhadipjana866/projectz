@@ -3,6 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import CapsuleSelector from '../../components/CapsuleSelector';
+import CollaborationModal from '../../components/CollaborationModal';
 
 export default function CampaignDetails() {
   const { campaignId } = useParams();
@@ -23,6 +24,7 @@ export default function CampaignDetails() {
     platforms: [],
     imageFile: null
   });
+  const [showCollabModal, setShowCollabModal] = useState(false);
 
   useEffect(() => {
     fetchCampaignDetails();
@@ -305,6 +307,17 @@ export default function CampaignDetails() {
                       Edit
                     </button>
                   )}
+                  {!isOwner && user && (
+                    <button
+                      onClick={() => setShowCollabModal(true)}
+                      className="text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 px-4 py-1.5 rounded-lg transition-all flex items-center gap-1.5 shadow-lg shadow-purple-500/10"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                      Collaborate
+                    </button>
+                  )}
                 </div>
                 <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight">
                   {campaign.campaign_name || 'Untitled Campaign'}
@@ -391,6 +404,16 @@ export default function CampaignDetails() {
           </div>
         </div>
       </div>
+
+      {/* Collaboration Modal */}
+      <CollaborationModal
+        isOpen={showCollabModal}
+        onClose={() => setShowCollabModal(false)}
+        receiverId={campaign?.brands?.user_id}
+        receiverName={null}
+        campaignId={campaign?.id}
+        campaignName={campaign?.campaign_name}
+      />
     </div>
   );
 }

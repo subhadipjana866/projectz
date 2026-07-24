@@ -11,12 +11,13 @@ import ResetPassword from './pages/reset-password/ResetPassword'
 import VerifyEmail from './pages/verify-email/VerifyEmail'
 import UpdatePassword from './pages/update-password/UpdatePassword'
 import OnboardingRole from './pages/onboarding/OnboardingRole'
-import Dashboard from './pages/Dashboard'
 import Profile from './pages/profile/Profile'
 import Projects from './pages/projects/Projects'
 import ProjectDetails from './pages/projects/ProjectDetails'
 import CampaignDetails from './pages/projects/CampaignDetails'
 import Search from './pages/search/Search'
+import Inbox from './pages/inbox/Inbox'
+import Chat from './pages/chat/Chat'
 import './index.css'
 
 function App() {
@@ -44,12 +45,14 @@ function App() {
 
             {/* App pages — shared navbar via layout */}
             <Route element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-              <Route path="/dashboard" element={<Dashboard />} />
               <Route path="/profile/:userId" element={<Profile />} />
               <Route path="/projects" element={<Projects />} />
               <Route path="/projects/:projectId" element={<ProjectDetails />} />
               <Route path="/campaigns/:campaignId" element={<CampaignDetails />} />
               <Route path="/search" element={<Search />} />
+              <Route path="/inbox" element={<Inbox />} />
+              <Route path="/chat" element={<Chat />} />
+              <Route path="/chat/:collaborationId" element={<Chat />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" />} />
