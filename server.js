@@ -1,6 +1,9 @@
 // Import express and dependencies
 import express from 'express';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import { supabaseAdmin } from './db.js';
 import { generateS3UploadUrl } from './s3.js';
 import { google } from 'googleapis';
@@ -9,14 +12,34 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // Create an instance of express
 const app = express();
 app.use(express.json());
 
+// Minimal CORS support. In dev the Vite proxy serves /api from the same origin,
+// but this makes the API usable directly (e.g. production on a different host).
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin) res.header('Access-Control-Allow-Origin', origin);
+  res.header('Vary', 'Origin');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 // Configuration
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
+const PORT = process.env.PORT || 8000;
+// Public origin this server is reachable at. In the single-server deployment
+// this is the one domain serving both the API and the built frontend, so it
+// doubles as the OAuth redirect base and the post-login redirect target.
+const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
+const FRONTEND_URL = process.env.FRONTEND_URL || APP_URL;
 
 const SCOPES = [
   'https://www.googleapis.com/auth/youtube.readonly',
@@ -41,11 +64,22 @@ function validateState(state) {
   return data.userId;
 }
 
+// Resolve the authenticated user id from a Supabase access token.
+// Returns null when the token is missing or invalid.
+async function getAuthUserId(req) {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+  if (!token) return null;
+  const { data, error } = await supabaseAdmin.auth.getUser(token);
+  if (error || !data?.user) return null;
+  return data.user.id;
+}
+
 function getOAuth2Client() {
   return new google.auth.OAuth2(
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
-    `http://localhost:8000/api/youtube/callback`
+    `${APP_URL}/api/youtube/callback`
   );
 }
 
@@ -356,13 +390,94 @@ async function fetchFreshAnalytics(connection) {
   };
 }
 
+// ─── Profile Provisioning Endpoint ──────────────────────────────────────────
+
+// Ensure the caller has the creators/brands row that matches their role.
+// Idempotent, app-level safety net that complements the DB trigger.
+// Verifies the Supabase access token to derive the user id (does not trust the body).
+app.post('/api/profile/me/initialize', async (req, res) => {
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Missing Authorization bearer token' });
+  }
+
+  try {
+    // Resolve the user from the token — never trust a client-supplied id here.
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+    const userId = userData.user.id;
+
+    // Look up the role recorded in public.users.
+    const { data: profile, error: profileErr } = await supabaseAdmin
+      .from('users')
+      .select('role')
+      .eq('id', userId)
+      .maybeSingle();
+
+    if (profileErr) throw profileErr;
+
+    const role = profile?.role || null;
+    const result = { role, creatorId: null, brandId: null };
+
+    if (!role) {
+      // No role chosen yet — nothing to provision.
+      return res.json(result);
+    }
+
+    // Brands cover brand/agency/production; creators cover creator.
+    const isBrandLike = ['brand', 'agency', 'production'].includes(role);
+    const table = role === 'creator' ? 'creators' : isBrandLike ? 'brands' : null;
+
+    if (!table) {
+      return res.json(result);
+    }
+
+    // Get or create the provisioning row (exactly one per user).
+    const { data: existing } = await supabaseAdmin
+      .from(table)
+      .select('id')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    let rowId = existing?.id;
+    if (!rowId) {
+      const { data: inserted, error: insertErr } = await supabaseAdmin
+        .from(table)
+        .insert([{ user_id: userId }])
+        .select('id')
+        .single();
+      if (insertErr) throw insertErr;
+      rowId = inserted.id;
+      console.log(`[PROFILE_INIT] Provisioned ${table} row for user:`, userId);
+    }
+
+    if (role === 'creator') result.creatorId = rowId;
+    else result.brandId = rowId;
+
+    res.json(result);
+  } catch (err) {
+    console.error('[PROFILE_INIT] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── S3 Upload Endpoint ─────────────────────────────────────────────────────
 
 app.post('/api/signUploadUrl', async (req, res) => {
-  console.log('[S3] Received signUploadUrl request:', { userFirstName: req.body.userFirstName, fileName: req.body.fileName });
+  const userId = await getAuthUserId(req);
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 
-  const { userFirstName, fileName, fileType } = req.body;
-  let s3_key = `uploads/${userFirstName}/${fileName}`;
+  console.log('[S3] Received signUploadUrl request:', { userId, fileName: req.body.fileName });
+
+  const { fileName, fileType } = req.body;
+  // Scope the key to the authenticated user — never trust a client-supplied path.
+  let s3_key = `uploads/${userId}/${fileName}`;
   const uploadUrl = await generateS3UploadUrl(s3_key, fileType);
 
   if (!uploadUrl) {
@@ -663,10 +778,15 @@ app.delete('/api/youtube/disconnect', async (req, res) => {
 
 // Send a collaboration request
 app.post('/api/collaborations', async (req, res) => {
-  const { senderId, receiverId, projectId, campaignId, message, budget, timeline } = req.body;
+  const senderId = await getAuthUserId(req);
+  if (!senderId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 
-  if (!senderId || !receiverId || !message) {
-    return res.status(400).json({ error: 'senderId, receiverId, and message are required' });
+  const { receiverId, projectId, campaignId, message, budget, timeline } = req.body;
+
+  if (!receiverId || !message) {
+    return res.status(400).json({ error: 'receiverId and message are required' });
   }
 
   if (senderId === receiverId) {
@@ -718,10 +838,9 @@ app.post('/api/collaborations', async (req, res) => {
 
 // Get received collaboration requests (inbox)
 app.get('/api/collaborations/inbox', async (req, res) => {
-  const { userId } = req.query;
-
+  const userId = await getAuthUserId(req);
   if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -747,10 +866,9 @@ app.get('/api/collaborations/inbox', async (req, res) => {
 
 // Get sent collaboration requests
 app.get('/api/collaborations/sent', async (req, res) => {
-  const { userId } = req.query;
-
+  const userId = await getAuthUserId(req);
   if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -776,10 +894,9 @@ app.get('/api/collaborations/sent', async (req, res) => {
 
 // Get all accepted collaborations for chat list
 app.get('/api/collaborations/chats', async (req, res) => {
-  const { userId } = req.query;
-
+  const userId = await getAuthUserId(req);
   if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -805,13 +922,51 @@ app.get('/api/collaborations/chats', async (req, res) => {
   }
 });
 
-// Accept a collaboration request
-app.patch('/api/collaborations/:id/accept', async (req, res) => {
-  const { id } = req.params;
+// Get distinct accepted-collaboration partners for a user (for "Recent Partners")
+app.get('/api/collaborations/partners', async (req, res) => {
   const { userId } = req.query;
 
   if (!userId) {
     return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('collaboration_requests')
+      .select(`
+        sender:sender_id(id, display_name, avatar, role),
+        receiver:receiver_id(id, display_name, avatar, role)
+      `)
+      .eq('status', 'accepted')
+      .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`)
+      .order('updated_at', { ascending: false });
+
+    if (error) throw error;
+
+    // Reduce to the distinct "other" party in each accepted collaboration.
+    const seen = new Set();
+    const partners = [];
+    for (const row of data || []) {
+      const other = row.sender?.id === userId ? row.receiver : row.sender;
+      if (other?.id && !seen.has(other.id)) {
+        seen.add(other.id);
+        partners.push(other);
+      }
+    }
+
+    res.json(partners);
+  } catch (err) {
+    console.error('[COLLAB] Error fetching partners:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Accept a collaboration request
+app.patch('/api/collaborations/:id/accept', async (req, res) => {
+  const { id } = req.params;
+  const userId = await getAuthUserId(req);
+  if (!userId) {
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -846,10 +1001,9 @@ app.patch('/api/collaborations/:id/accept', async (req, res) => {
 // Reject a collaboration request
 app.patch('/api/collaborations/:id/reject', async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.query;
-
+  const userId = await getAuthUserId(req);
   if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -883,10 +1037,9 @@ app.patch('/api/collaborations/:id/reject', async (req, res) => {
 // Get chat messages for a collaboration
 app.get('/api/collaborations/:id/messages', async (req, res) => {
   const { id } = req.params;
-  const { userId } = req.query;
-
+  const userId = await getAuthUserId(req);
   if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+    return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
@@ -926,10 +1079,14 @@ app.get('/api/collaborations/:id/messages', async (req, res) => {
 // Send a chat message
 app.post('/api/collaborations/:id/messages', async (req, res) => {
   const { id } = req.params;
-  const { senderId, content } = req.body;
+  const senderId = await getAuthUserId(req);
+  if (!senderId) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 
-  if (!senderId || !content) {
-    return res.status(400).json({ error: 'senderId and content are required' });
+  const { content } = req.body;
+  if (!content) {
+    return res.status(400).json({ error: 'content is required' });
   }
 
   try {
@@ -970,11 +1127,28 @@ app.post('/api/collaborations/:id/messages', async (req, res) => {
   }
 });
 
+// ─── Serve the built frontend (single-server deployment) ──────────────────
+// When frontend/dist exists (i.e. `npm run build` has been run in frontend/),
+// this same Express process serves the SPA too, so the whole app is one
+// server on one port. Must be mounted after every /api route above.
+const FRONTEND_DIST = path.join(__dirname, '../frontend/dist');
+
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+
+  // SPA fallback: any non-API GET request returns index.html so React Router
+  // can handle the route client-side (e.g. a hard refresh on /projects/123).
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+} else {
+  console.log('[SERVER] frontend/dist not found — run `npm run build` in frontend/ to serve it from here.');
+}
+
 // ─── Start Server ───────────────────────────────────────────────────────────
 
-const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => {
   console.log(`[SERVER] Server is running on port ${PORT}`);
-  console.log(`[SERVER] Frontend URL: ${FRONTEND_URL}`);
-  console.log(`[SERVER] YouTube callback URL: http://localhost:${PORT}/api/youtube/callback`);
+  console.log(`[SERVER] App URL: ${APP_URL}`);
+  console.log(`[SERVER] YouTube callback URL: ${APP_URL}/api/youtube/callback`);
 });

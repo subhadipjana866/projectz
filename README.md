@@ -1,178 +1,69 @@
-# FastAPI Login System with Supabase and JWT
+# CollabHub — Backend (Express + Supabase)
 
-This is a complete authentication system built with FastAPI, Supabase, and JWT tokens.
+Node/Express API for CollabHub. It handles the pieces that need server-side
+secrets or third-party OAuth; the frontend talks to **Supabase directly** for
+auth and most CRUD (users, creators, brands, projects, campaigns).
 
-## Features
+## What this server does
 
-- User registration and login
-- JWT token-based authentication
-- Password hashing with bcrypt
-- User profile endpoint
-- CORS middleware for frontend communication
-- Supabase database integration
+- **S3 uploads** — issues presigned PUT URLs so the browser can upload images.
+- **YouTube OAuth + analytics** — connects a channel, caches analytics (24h).
+- **Collaborations & chat** — send/accept/reject requests, list inbox/sent,
+  chat messages (realtime is delivered by Supabase, not this server).
+- **Profile provisioning** — `POST /api/profile/me/initialize` ensures the
+  signed-in user has the `creators`/`brands` row their role requires.
 
-## Setup Instructions
+Uses the Supabase **service-role** key ([db.js](db.js)), so it bypasses RLS —
+keep it server-side only.
 
-### 1. Install Dependencies
+## Setup
 
+### 1. Install dependencies
 ```bash
-pip install -r requirements.txt
+npm install
 ```
 
-### 2. Set Up Environment Variables
+### 2. Environment variables
+Copy `.env.example` to `.env` and fill in:
+- `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` — Supabase project + service-role key
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` — for YouTube OAuth
+- `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_S3_BUCKET_NAME`
+- `FRONTEND_URL` (default `http://localhost:3000`), `PORT` (default `8000`)
 
-Copy `.env.example` to `.env`:
+### 3. Database migrations
+Run these in the Supabase SQL editor, in order:
+1. `core_tables_migration.sql` — provisioning triggers + integrity fixes for
+   `creators`/`brands` (the app breaks without this).
+2. `collaboration_migration.sql` — `collaboration_requests` + `chat_messages`
+   (+ realtime publication).
+3. `youtube_connections_migration.sql` — YouTube tokens + cached analytics.
 
+### 4. Run
 ```bash
-cp .env.example .env
+node server.js
 ```
+API on `http://localhost:8000`. In dev the Vite frontend proxies `/api` here
+(see `frontend/vite.config.js`), so no CORS setup is needed locally.
 
-Then fill in your Supabase credentials:
-- `SUPABASE_URL`: Your Supabase project URL
-- `SUPABASE_KEY`: Your Supabase anonymous key
-- `SECRET_KEY`: A secure random key for JWT signing (generate one: `python -c "import secrets; print(secrets.token_urlsafe(32))"`)
+## Endpoints
 
-### 3. Set Up Supabase Database
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| POST | `/api/signUploadUrl` | Presigned S3 upload URL |
+| POST | `/api/profile/me/initialize` | Provision creators/brands row (Bearer token) |
+| GET | `/api/youtube/auth-url` | Start YouTube OAuth |
+| GET | `/api/youtube/callback` | OAuth redirect target |
+| GET | `/api/youtube/status` | Connection status |
+| GET | `/api/youtube/analytics` | Cached/fresh analytics |
+| DELETE | `/api/youtube/disconnect` | Disconnect channel |
+| POST | `/api/collaborations` | Send a request |
+| GET | `/api/collaborations/inbox` \| `/sent` \| `/chats` \| `/partners` | Lists |
+| PATCH | `/api/collaborations/:id/accept` \| `/reject` | Update status |
+| GET/POST | `/api/collaborations/:id/messages` | Chat messages |
 
-Create a `users` table in your Supabase project with the following schema:
+## Notes / known limitations
 
-```sql
-CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password VARCHAR(255) NOT NULL,
-  full_name VARCHAR(255),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- Add index for faster email lookups
-CREATE INDEX users_email_idx ON users(email);
-```
-
-### 4. Run the Server
-
-```bash
-python main.py
-```
-
-The API will be available at `http://localhost:8000`
-
-API documentation is available at:
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-
-## API Endpoints
-
-### Register
-- **POST** `/api/auth/register`
-- Request body:
-  ```json
-  {
-    "email": "user@example.com",
-    "password": "securepassword",
-    "full_name": "John Doe"
-  }
-  ```
-- Response: Access token and user info
-
-### Login
-- **POST** `/api/auth/login`
-- Request body:
-  ```json
-  {
-    "email": "user@example.com",
-    "password": "securepassword"
-  }
-  ```
-- Response: Access token and user info
-
-### Get Current User
-- **GET** `/api/auth/me`
-- Headers: `Authorization: Bearer <access_token>`
-- Response: Current user info
-
-### Health Check
-- **GET** `/health`
-- Response: Server status
-
-## Project Structure
-
-```
-backend/
-├── main.py           # FastAPI application entry point
-├── config.py         # Configuration and environment variables
-├── auth.py           # JWT and password utilities
-├── database.py       # Supabase database connection
-├── schemas.py        # Pydantic models for request/response
-├── routes.py         # Authentication endpoints
-├── requirements.txt  # Python dependencies
-├── .env.example      # Example environment variables
-└── .env              # Actual environment variables (not in git)
-```
-
-## Security Notes
-
-1. **Never commit `.env` file** to version control
-2. **Change `SECRET_KEY`** in production to a strong random value
-3. **Use HTTPS** in production
-4. **Set appropriate CORS origins** for your frontend
-5. **Store sensitive information** in environment variables
-
-## Frontend Integration Example
-
-```javascript
-// Register
-async function register(email, password, fullName) {
-  const response = await fetch('http://localhost:8000/api/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      email, 
-      password, 
-      full_name: fullName 
-    })
-  });
-  return response.json();
-}
-
-// Login
-async function login(email, password) {
-  const response = await fetch('http://localhost:8000/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password })
-  });
-  return response.json();
-}
-
-// Get current user
-async function getCurrentUser(token) {
-  const response = await fetch('http://localhost:8000/api/auth/me', {
-    headers: { 'Authorization': `Bearer ${token}` }
-  });
-  return response.json();
-}
-```
-
-## Troubleshooting
-
-### "Module not found" errors
-Make sure all dependencies are installed:
-```bash
-pip install -r requirements.txt
-```
-
-### Supabase connection errors
-- Verify `SUPABASE_URL` and `SUPABASE_KEY` in `.env`
-- Check your Supabase project status
-- Ensure the `users` table exists with correct schema
-
-### JWT errors
-- Verify `SECRET_KEY` is set in `.env`
-- Check token hasn't expired (default: 30 minutes)
-- Ensure token is passed correctly in Authorization header
-
-## License
-
-MIT
+- Most endpoints trust the `userId` query/body param (MVP). `initialize`
+  verifies the Supabase access token. Adding shared auth middleware is a
+  follow-up.
+- Never commit `.env`. Use the service-role key on the server only.
