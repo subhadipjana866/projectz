@@ -1,0 +1,31 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "This is a complete authentication system built with FastAPI, Supabase, and JWT tokens.",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/subhadipjana866/projectX.git"
+  },
+  "author": "subhadip",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/subhadipjana866/projectX/issues"
+  },
+  "homepage": "https://github.com/subhadipjana866/projectX#readme",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1019.0",
+    "@aws-sdk/s3-request-presigner": "^3.1019.0",
+    "@supabase/supabase-js": "^2.101.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "googleapis": "^139.0.0",
+    "google-auth-library": "^9.6.0",
+    "axios": "^1.6.8"
+  }
+}
