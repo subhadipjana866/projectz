@@ -1,0 +1,22 @@
+# Reverse proxy for the merged CollabHub server (Express serves both the API
+# and the built frontend on port 8000 — see backend/server.js).
+#
+# Install: sudo cp deploy/nginx.conf.example /etc/nginx/sites-available/collabhub
+#          sudo ln -s /etc/nginx/sites-available/collabhub /etc/nginx/sites-enabled/
+#          sudo rm -f /etc/nginx/sites-enabled/default
+#          sudo nginx -t && sudo systemctl reload nginx
+# Then run: sudo certbot --nginx -d yourdomain.com
+# (certbot rewrites this file to add the 443/SSL block and the 80->443 redirect)
+
+server {
+    listen 80;
+    server_name yourdomain.com;
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
