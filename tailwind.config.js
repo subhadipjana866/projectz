@@ -8,20 +8,36 @@ export default {
     extend: {
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
-        display: ['Poppins', 'system-ui', 'sans-serif'],
+        display: ['"Space Grotesk"', 'Inter', 'system-ui', 'sans-serif'],
       },
       colors: {
+        // Deep canvas scale
+        ink: {
+          950: '#05070e',
+          900: '#090c16',
+          850: '#0c101d',
+          800: '#101527',
+          700: '#161c33',
+        },
+        // Electric indigo — the brand primary
         primary: {
-          50: '#f0f4ff',
-          100: '#e6ecff',
-          200: '#c4d9ff',
-          300: '#a2c6ff',
-          400: '#5f99ff',
-          500: '#3b6cff',
-          600: '#204cff',
-          700: '#0035ff',
-          800: '#0029cc',
-          900: '#001e99',
+          50: '#eef1ff',
+          100: '#e0e5ff',
+          200: '#c6cfff',
+          300: '#a4b1ff',
+          400: '#8290ff',
+          500: '#6478ff',
+          600: '#4d5eff',
+          700: '#3d49e0',
+          800: '#323bb0',
+          900: '#2b338c',
+        },
+        accent: {
+          violet: '#a855f7',
+          cyan: '#22d3ee',
+          emerald: '#34d399',
+          amber: '#fbbf24',
+          rose: '#fb7185',
         },
         slate: {
           50: '#f8fafc',
@@ -35,18 +51,21 @@ export default {
           800: '#1e293b',
           900: '#0f172a',
         },
+        // Legacy aliases still referenced in a few places
         brand: {
-          blue: '#1152d4',
-          'dark-blue': '#0d41a0',
+          blue: '#4d5eff',
+          'dark-blue': '#3d49e0',
         },
       },
       boxShadow: {
-        subtle: '0 1px 2px 0 rgba(0, 0, 0, 0.05)',
-        base: '0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06)',
-        md: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-        lg: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-        xl: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-      }
+        subtle: '0 1px 2px 0 rgba(0, 0, 0, 0.3)',
+        card: '0 8px 30px -12px rgba(0, 0, 0, 0.55)',
+        'glow-primary': '0 8px 32px -8px rgba(100, 120, 255, 0.45)',
+        'glow-violet': '0 8px 32px -8px rgba(168, 85, 247, 0.4)',
+      },
+      maxWidth: {
+        '8xl': '90rem',
+      },
     },
   },
   plugins: [],

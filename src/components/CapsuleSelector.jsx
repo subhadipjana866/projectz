@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 
-export default function CapsuleSelector({ 
-  label, 
-  placeholder = "Add an item...", 
-  value = [], 
+export default function CapsuleSelector({
+  label,
+  placeholder = "Add an item...",
+  value = [],
   onChange,
   presetOptions = [],
   maxItems = null,
@@ -45,31 +45,34 @@ export default function CapsuleSelector({
   return (
     <div className="w-full">
       {label && (
-        <label className="block text-sm font-semibold text-slate-200 mb-2">
+        <label className="field-label">
           {label}
-          {required && <span className="text-red-400">*</span>}
+          {required && <span className="text-rose-400">*</span>}
         </label>
       )}
-      
+
       <div className="relative">
-        <div className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-lg focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-transparent transition-all flex flex-wrap items-center gap-2 min-h-[44px]">
+        <div className="w-full px-4 py-2.5 bg-white/[0.04] border border-white/10 rounded-xl focus-within:border-primary-500/60 focus-within:ring-2 focus-within:ring-primary-500/25 transition-all flex flex-wrap items-center gap-2 min-h-[48px]">
           {/* Selected Capsules */}
           {value.map((item, index) => (
             <div
               key={index}
-              className="inline-flex items-center gap-2 px-3 py-1.5 bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-full text-sm font-medium whitespace-nowrap"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary-500/15 text-primary-300 border border-primary-500/25 rounded-full text-sm font-medium whitespace-nowrap"
             >
               {item}
               <button
                 type="button"
                 onClick={() => handleRemoveItem(index)}
-                className="ml-1 hover:text-blue-200 focus:outline-none transition-colors"
+                className="ml-0.5 hover:text-white focus:outline-none transition-colors"
+                aria-label={`Remove ${item}`}
               >
-                ✕
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
           ))}
-          
+
           {/* Input Field */}
           <input
             type="text"
@@ -90,13 +93,13 @@ export default function CapsuleSelector({
 
         {/* Dropdown Options */}
         {shouldShowOptions && (
-          <div className="absolute top-full mt-2 left-0 right-0 bg-[#1a2332] border border-white/10 rounded-lg shadow-lg z-10 max-h-48 overflow-y-auto">
+          <div className="absolute top-full mt-2 left-0 right-0 bg-ink-800 border border-white/10 rounded-xl shadow-card z-10 max-h-48 overflow-y-auto animate-scale-in">
             {filteredOptions.map((option) => (
               <button
                 key={option}
                 type="button"
                 onClick={() => handleAddItem(option)}
-                className="w-full text-left px-4 py-2.5 text-slate-300 hover:bg-blue-500/20 hover:text-blue-300 transition-colors border-b border-white/5 last:border-b-0 text-sm"
+                className="w-full text-left px-4 py-2.5 text-slate-300 hover:bg-primary-500/15 hover:text-primary-300 transition-colors border-b border-white/[0.04] last:border-b-0 text-sm"
               >
                 {option}
               </button>

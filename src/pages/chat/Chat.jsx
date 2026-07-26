@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { apiFetch } from '../../lib/api';
+import { Avatar, Spinner } from '../../components/ui';
 
 export default function Chat() {
   const { collaborationId } = useParams();
@@ -63,7 +65,7 @@ export default function Chat() {
           if (newMsg.sender_id === user.id) return; // Already added optimistically
 
           try {
-            const res = await fetch(`/api/collaborations/${selectedChat.id}/messages?userId=${user.id}`);
+            const res = await apiFetch(`/api/collaborations/${selectedChat.id}/messages`);
             const allMessages = await res.json();
             setMessages(allMessages);
           } catch (err) {
@@ -87,7 +89,7 @@ export default function Chat() {
   const fetchChats = async () => {
     setLoadingChats(true);
     try {
-      const res = await fetch(`/api/collaborations/chats?userId=${user.id}`);
+      const res = await apiFetch(`/api/collaborations/chats`);
       const data = await res.json();
       setChats(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -100,7 +102,7 @@ export default function Chat() {
   const fetchMessages = async (chatId) => {
     setLoadingMessages(true);
     try {
-      const res = await fetch(`/api/collaborations/${chatId}/messages?userId=${user.id}`);
+      const res = await apiFetch(`/api/collaborations/${chatId}/messages`);
       const data = await res.json();
       setMessages(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -131,10 +133,10 @@ export default function Chat() {
     setMessages(prev => [...prev, optimisticMsg]);
 
     try {
-      const res = await fetch(`/api/collaborations/${selectedChat.id}/messages`, {
+      const res = await apiFetch(`/api/collaborations/${selectedChat.id}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ senderId: user.id, content: messageContent }),
+        body: JSON.stringify({ content: messageContent }),
       });
 
       if (!res.ok) throw new Error('Failed to send');
@@ -176,22 +178,23 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-64px)]">
-      {/* Sidebar - Chat List */}
-      <div className="w-80 border-r border-white/10 flex flex-col bg-[rgba(255,255,255,0.02)]">
-        <div className="p-5 border-b border-white/10">
-          <h2 className="text-lg font-bold text-white">Messages</h2>
-          <p className="text-xs text-slate-500 mt-0.5">{chats.length} conversation{chats.length !== 1 ? 's' : ''}</p>
+    <div className="flex flex-1 h-[calc(100dvh-4rem)] lg:h-dvh overflow-hidden">
+      {/* Sidebar - Chat List (full width on mobile, hidden once a chat is open) */}
+      <div className={`${selectedChat ? 'hidden md:flex' : 'flex'} w-full md:w-80 xl:w-96 border-r border-white/[0.07] flex-col bg-white/[0.015]`}>
+        <div className="px-6 py-5 border-b border-white/[0.07] text-left">
+          <p className="eyebrow mb-1">Conversations</p>
+          <h2 className="text-xl font-bold text-white">Messages</h2>
+          <p className="text-xs text-slate-500 mt-1">{chats.length} conversation{chats.length !== 1 ? 's' : ''}</p>
         </div>
 
-        <div className="flex-1 overflow-y-auto">
+        <div className="stagger-children flex-1 overflow-y-auto py-2">
           {loadingChats ? (
             <div className="flex justify-center py-12">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+              <Spinner className="h-8 w-8" />
             </div>
           ) : chats.length === 0 ? (
             <div className="p-6 text-center">
-              <p className="text-slate-500 text-sm">No conversations yet</p>
+              <p className="text-slate-400 text-sm font-medium">No conversations yet</p>
               <p className="text-slate-600 text-xs mt-1">Accept a collaboration request to start chatting.</p>
             </div>
           ) : (
@@ -203,19 +206,13 @@ export default function Chat() {
                 <div
                   key={chat.id}
                   onClick={() => setSelectedChat(chat)}
-                  className={`flex items-center gap-3 px-5 py-4 cursor-pointer transition-all border-b border-white/5 ${isSelected
-                    ? 'bg-[#1152d4]/20 border-l-2 border-l-[#1152d4]'
-                    : 'hover:bg-white/5 border-l-2 border-l-transparent'
+                  className={`flex items-center gap-3 mx-3 my-0.5 px-3 py-3.5 rounded-xl cursor-pointer transition-all ${isSelected
+                    ? 'bg-gradient-to-r from-primary-600/20 to-transparent border border-primary-500/25'
+                    : 'border border-transparent hover:bg-white/[0.04]'
                     }`}
                 >
-                  <div className="w-10 h-10 rounded-full overflow-hidden bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shrink-0 border border-white/10">
-                    {other?.avatar ? (
-                      <img src={other.avatar} alt={other.display_name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-white text-sm font-bold">{other?.display_name?.[0]?.toUpperCase() || '?'}</span>
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
+                  <Avatar src={other?.avatar} name={other?.display_name} className="w-10 h-10" />
+                  <div className="flex-1 min-w-0 text-left">
                     <p className={`text-sm font-semibold truncate ${isSelected ? 'text-white' : 'text-slate-200'}`}>
                       {other?.display_name || 'Unknown'}
                     </p>
@@ -229,40 +226,46 @@ export default function Chat() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
+      {/* Main Chat Area (full screen on mobile when a chat is selected) */}
+      <div className={`${selectedChat ? 'flex' : 'hidden md:flex'} flex-1 flex-col min-w-0`}>
         {!selectedChat ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-white/5 flex items-center justify-center">
+          <div className="flex-1 flex items-center justify-center relative">
+            <div className="absolute inset-0 grid-bg opacity-50" aria-hidden="true" />
+            <div className="relative text-center">
+              <div className="w-20 h-20 mx-auto mb-5 rounded-3xl bg-white/[0.04] border border-white/10 flex items-center justify-center">
                 <svg className="w-10 h-10 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                 </svg>
               </div>
-              <p className="text-slate-400 text-lg font-medium">Select a conversation</p>
+              <p className="text-white text-lg font-semibold">Select a conversation</p>
               <p className="text-slate-500 text-sm mt-1">Choose a chat from the sidebar to start messaging.</p>
             </div>
           </div>
         ) : (
           <>
             {/* Chat Header */}
-            <div className="px-6 py-4 border-b border-white/10 flex items-center gap-4 bg-[rgba(255,255,255,0.02)]">
+            <div className="px-6 py-4 border-b border-white/[0.07] flex items-center gap-4 bg-white/[0.015] backdrop-blur-sm">
               {(() => {
                 const other = getOtherUser(selectedChat);
                 return (
                   <>
-                    <div
-                      className="w-10 h-10 rounded-full overflow-hidden bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shrink-0 cursor-pointer border border-white/10"
-                      onClick={() => other && navigate(`/profile/${other.id}`)}
+                    <button
+                      className="md:hidden p-1.5 -ml-2 rounded-lg text-slate-400 hover:text-white hover:bg-white/10 transition-colors shrink-0"
+                      onClick={() => { setSelectedChat(null); navigate('/chat', { replace: true }); }}
+                      aria-label="Back to conversations"
                     >
-                      {other?.avatar ? (
-                        <img src={other.avatar} alt={other.display_name} className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-white text-sm font-bold">{other?.display_name?.[0]?.toUpperCase() || '?'}</span>
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-semibold text-white cursor-pointer hover:text-blue-400 transition-colors" onClick={() => other && navigate(`/profile/${other.id}`)}>
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                      </svg>
+                    </button>
+                    <Avatar
+                      src={other?.avatar}
+                      name={other?.display_name}
+                      className="w-10 h-10"
+                      onClick={() => other && navigate(`/profile/${other.id}`)}
+                    />
+                    <div className="flex-1 text-left">
+                      <p className="font-semibold text-white cursor-pointer hover:text-primary-300 transition-colors" onClick={() => other && navigate(`/profile/${other.id}`)}>
                         {other?.display_name || 'Unknown'}
                       </p>
                       <p className="text-xs text-slate-500">{getContextLabel(selectedChat)}</p>
@@ -276,7 +279,7 @@ export default function Chat() {
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-1">
               {loadingMessages ? (
                 <div className="flex justify-center py-12">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+                  <Spinner className="h-8 w-8" />
                 </div>
               ) : messages.length === 0 ? (
                 <div className="flex items-center justify-center h-full">
@@ -294,29 +297,27 @@ export default function Chat() {
                     <div key={msg.id} className={`flex items-end gap-2 ${isOwn ? 'justify-end' : 'justify-start'} ${showAvatar ? 'mt-4' : 'mt-0.5'}`}>
                       {/* Avatar for other user */}
                       {!isOwn && (
-                        <div className={`w-7 h-7 rounded-full overflow-hidden flex items-center justify-center shrink-0 ${showAvatar ? 'bg-gradient-to-br from-blue-600 to-purple-600 border border-white/10' : 'invisible'}`}>
-                          {msg.sender?.avatar ? (
-                            <img src={msg.sender.avatar} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-white text-[10px] font-bold">{msg.sender?.display_name?.[0]?.toUpperCase() || '?'}</span>
-                          )}
-                        </div>
+                        showAvatar ? (
+                          <Avatar src={msg.sender?.avatar} name={msg.sender?.display_name} className="w-7 h-7" textSize="text-[10px]" />
+                        ) : (
+                          <div className="w-7 h-7 shrink-0" />
+                        )
                       )}
 
-                      <div className={`max-w-[65%] ${isOwn ? 'order-1' : ''}`}>
+                      <div className={`max-w-[70%] sm:max-w-[60%] ${isOwn ? 'order-1' : ''}`}>
                         {showAvatar && !isOwn && (
-                          <p className="text-[10px] text-slate-500 mb-1 ml-1 font-medium">{msg.sender?.display_name}</p>
+                          <p className="text-[10px] text-slate-500 mb-1 ml-1 font-medium text-left">{msg.sender?.display_name}</p>
                         )}
                         <div
-                          className={`px-4 py-2.5 text-sm leading-relaxed ${isOwn
-                            ? `bg-[#1152d4] text-white ${isLast ? 'rounded-2xl rounded-br-md' : 'rounded-2xl'}`
-                            : `bg-white/[0.07] text-slate-200 border border-white/5 ${isLast ? 'rounded-2xl rounded-bl-md' : 'rounded-2xl'}`
+                          className={`px-4 py-2.5 text-sm leading-relaxed text-left ${isOwn
+                            ? `bg-gradient-to-r from-primary-600 to-primary-500 text-white shadow-glow-primary ${isLast ? 'rounded-2xl rounded-br-md' : 'rounded-2xl'}`
+                            : `bg-white/[0.06] text-slate-200 border border-white/[0.06] ${isLast ? 'rounded-2xl rounded-bl-md' : 'rounded-2xl'}`
                             } ${msg._optimistic ? 'opacity-70' : ''}`}
                         >
                           {msg.content}
                         </div>
                         {isLast && (
-                          <p className={`text-[10px] text-slate-600 mt-1 ${isOwn ? 'text-right mr-1' : 'ml-1'}`}>
+                          <p className={`text-[10px] text-slate-600 mt-1 ${isOwn ? 'text-right mr-1' : 'text-left ml-1'}`}>
                             {formatTime(msg.created_at)}
                           </p>
                         )}
@@ -329,21 +330,22 @@ export default function Chat() {
             </div>
 
             {/* Message Input */}
-            <div className="px-6 py-4 border-t border-white/10 bg-[rgba(255,255,255,0.02)]">
+            <div className="px-6 py-4 border-t border-white/[0.07] bg-white/[0.015]">
               <form onSubmit={sendMessage} className="flex gap-3">
                 <input
                   ref={inputRef}
                   type="text"
                   value={newMessage}
                   onChange={(e) => setNewMessage(e.target.value)}
-                  placeholder="Type a message..."
-                  className="flex-1 px-5 py-3 bg-white/5 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+                  placeholder="Type a message…"
+                  className="field flex-1 !rounded-2xl px-5"
                   autoFocus
                 />
                 <button
                   type="submit"
                   disabled={!newMessage.trim() || sending}
-                  className="px-5 py-3 bg-[#1152d4] hover:bg-blue-700 text-white rounded-xl transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-lg shadow-blue-500/10"
+                  className="btn-primary !rounded-2xl px-5 disabled:opacity-30"
+                  aria-label="Send message"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />

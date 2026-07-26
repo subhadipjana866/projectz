@@ -2,8 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
-import logo from '../../assets/logo.svg';
-import './UpdatePassword.css';
+import { AuthShell, PasswordInput } from '../../components/ui';
 
 export default function UpdatePassword() {
   const [password, setPassword] = useState('');
@@ -33,7 +32,6 @@ export default function UpdatePassword() {
         setSessionReady(true);
       } else if (accessToken && type === 'recovery') {
         // Supabase should have already set the session from the URL
-        // Try to get the current session
         try {
           const { data: { session: currentSession } } = await supabase.auth.getSession();
           if (currentSession) {
@@ -57,7 +55,6 @@ export default function UpdatePassword() {
     setError('');
     setSuccess(false);
 
-    // Validation
     if (password !== confirmPassword) {
       setError('Passwords do not match');
       return;
@@ -82,143 +79,78 @@ export default function UpdatePassword() {
         navigate('/login');
       }, 3000);
     } catch (err) {
-      let errorMessage = 'Failed to update password';
-      
-      if (err.message) {
-        errorMessage = err.message;
-      }
-      
-      setError(errorMessage);
+      setError(err.message || 'Failed to update password');
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <div
-      className="min-h-screen flex flex-col items-start w-full overflow-hidden"
-      style={{
-        backgroundImage: `
-          url('data:image/svg+xml;utf8,<svg viewBox="0 0 1280 1024" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><rect x="0" y="0" height="100%" width="100%" fill="url(%23grad)" opacity="1"/><defs><radialGradient id="grad" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="10" gradientTransform="matrix(181.02 0 0 144.82 0 0)"><stop stop-color="rgba(17,82,212,0.15)" offset="0"/><stop stop-color="rgba(17,82,212,0)" offset="0.5"/></radialGradient></defs></svg>'),
-          url('data:image/svg+xml;utf8,<svg viewBox="0 0 1280 1024" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"><rect x="0" y="0" height="100%" width="100%" fill="url(%23grad)" opacity="1"/><defs><radialGradient id="grad" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="10" gradientTransform="matrix(181.02 0 0 144.82 1280 1024)"><stop stop-color="rgba(17,82,212,0.1)" offset="0"/><stop stop-color="rgba(17,82,212,0)" offset="0.5"/></radialGradient></defs></svg>'),
-          linear-gradient(90deg, rgb(16, 22, 34) 0%, rgb(16, 22, 34) 100%)
-        `,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-      }}
-    >
-      {/* Header */}
-      <div className="backdrop-blur-md bg-[rgba(16,22,34,0.4)] border-b border-[rgba(255,255,255,0.1)] w-full flex items-center justify-between px-20">
-        <Link to="/" className="flex items-center gap-3">
-          <div className="bg-brand-blue flex items-center justify-center p-1.5 rounded-lg">
-            <img src={logo} alt="Logo" className="w-6 h-6"/>
-          </div>
-          <h1 className="font-bold text-xl text-white">CollabHub</h1>
-        </Link>
+    <AuthShell headerAction={<Link to="/login" className="btn-secondary btn-md">Sign in</Link>}>
+      <div className="text-left mb-9">
+        <p className="eyebrow mb-2">Account security</p>
+        <h2 className="font-display text-4xl font-bold text-white">Update password</h2>
+        <p className="mt-3 text-slate-400">Create a new password for your account.</p>
       </div>
 
-      {/* Main Content */}
-      <div className="flex-1 flex items-center justify-center w-full px-6 py-12">
-        {/* Password Card */}
-        <div className="backdrop-blur-md bg-[rgba(16,22,34,0.4)] border border-[rgba(255,255,255,0.1)] rounded-3xl shadow-2xl p-10 w-full max-w-md">
-          {/* Heading */}
-          <div className="mb-8">
-            <h2 className="text-4xl font-bold text-white mb-2">Update Password</h2>
-            <p className="text-slate-400">Create a new password for your account</p>
-          </div>
-
-          {/* Success Message */}
-          {success && (
-            <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg mb-6">
-              <p className="text-sm text-green-400">
-                ✓ Password updated successfully! Redirecting to login...
-              </p>
-            </div>
-          )}
-
-          {/* Error Message */}
-          {error && !success && (
-            <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg mb-6">
-              <p className="text-sm text-red-400">{error}</p>
-              {!sessionReady && (
-                <Link to="/forgot-password" className="text-xs text-red-400 underline mt-2 inline-block">
-                  Request a new password reset link
-                </Link>
-              )}
-            </div>
-          )}
-
-          {/* Form */}
-          {success ? (
-            <div className="text-center">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-green-500/20 rounded-full mb-4">
-                <span className="text-2xl text-green-400">✓</span>
-              </div>
-              <p className="text-slate-300 mb-4">Password updated successfully!</p>
-              <p className="text-sm text-slate-400 mb-6">Redirecting to login...</p>
-            </div>
-          ) : !sessionReady ? (
-            <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg text-center">
-              <p className="text-sm text-blue-400">
-                Please click the password reset link from the email we sent you to proceed.
-              </p>
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-5">
-              {/* New Password */}
-              <div>
-                <label className="block text-sm font-semibold text-slate-200 mb-2 pl-1">New Password</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  placeholder="Enter your new password"
-                  className="w-full px-4 py-3 bg-white text-slate-900 rounded-xl placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-blue transition-all"
-                />
-                <p className="text-xs text-slate-400 mt-2">At least 8 characters</p>
-              </div>
-
-              {/* Confirm Password */}
-              <div>
-                <label className="block text-sm font-semibold text-slate-200 mb-2 pl-1">Confirm Password</label>
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  required
-                  placeholder="Confirm your password"
-                  className="w-full px-4 py-3 bg-white text-slate-900 rounded-xl placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-blue transition-all"
-                />
-              </div>
-
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full mt-8 bg-brand-blue hover:bg-brand-dark-blue disabled:bg-slate-600 text-white font-bold py-3 rounded-lg transition-all shadow-lg hover:shadow-xl disabled:shadow-none"
-              >
-                {isLoading ? 'Updating Password...' : 'Update Password'}
-              </button>
-            </form>
-          )}
-
-          {/* Link Back */}
-          {!success && (
-            <p className="text-center text-slate-400 mt-8">
-              Remember your password?{' '}
-              <Link to="/login" className="font-semibold text-brand-blue hover:text-brand-dark-blue transition-colors">
-                Sign In
-              </Link>
-            </p>
+      {error && !success && (
+        <div className="alert-error mb-6">
+          {error}
+          {!sessionReady && (
+            <Link to="/forgot-password" className="block text-xs underline mt-2 text-rose-300 hover:text-rose-200">
+              Request a new password reset link
+            </Link>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Footer */}
-      <div className="w-full flex items-center justify-center py-6 border-t border-[rgba(255,255,255,0.1)]">
-        <p className="text-sm text-slate-500">© 2024 CollabHub. All rights reserved.</p>
-      </div>
-    </div>
+      {success ? (
+        <div className="glass p-8 text-center">
+          <div className="inline-flex items-center justify-center w-16 h-16 bg-emerald-500/15 border border-emerald-500/25 rounded-full mb-5">
+            <svg className="w-7 h-7 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <p className="text-white font-semibold text-lg">Password updated successfully!</p>
+          <p className="text-sm text-slate-400 mt-2">Redirecting to login…</p>
+        </div>
+      ) : !sessionReady ? (
+        <div className="alert-info text-center">
+          Please click the password reset link from the email we sent you to proceed.
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label className="field-label">New Password</label>
+            <PasswordInput
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your new password"
+            />
+            <p className="text-xs text-slate-500 mt-2 text-left">At least 8 characters</p>
+          </div>
+
+          <div>
+            <label className="field-label">Confirm Password</label>
+            <PasswordInput
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              placeholder="Confirm your password"
+            />
+          </div>
+
+          <button type="submit" disabled={isLoading} className="btn-primary btn-lg w-full !mt-7">
+            {isLoading ? 'Updating Password…' : 'Update Password'}
+          </button>
+        </form>
+      )}
+
+      {!success && (
+        <p className="text-center text-sm text-slate-400 mt-9">
+          Remember your password?{' '}
+          <Link to="/login" className="font-semibold text-primary-400 hover:text-primary-300 transition-colors">Sign In</Link>
+        </p>
+      )}
+    </AuthShell>
   );
 }

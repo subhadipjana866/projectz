@@ -2,15 +2,17 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
+import { apiFetch } from '../../lib/api';
 import axios from 'axios';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import CollaborationModal from '../../components/CollaborationModal';
+import SafeImage from '../../components/SafeImage';
+import { Modal, Avatar } from '../../components/ui';
 
 // Backend API calls go through vite proxy, no need for full URL
 
 export default function Profile() {
-  const { user, signOut } = useAuth();
-  // console.log("Profile component - user:", session, user);
+  const { user } = useAuth();
   const navigate = useNavigate();
   const { userId } = useParams();
 
@@ -37,6 +39,9 @@ export default function Profile() {
   const [userProjects, setUserProjects] = useState([]);
   const [userCampaigns, setUserCampaigns] = useState([]);
   const [loadingCreations, setLoadingCreations] = useState(false);
+
+  // Real accepted-collaboration partners for this profile
+  const [partners, setPartners] = useState([]);
 
   // Collaboration modal state
   const [showCollabModal, setShowCollabModal] = useState(false);
@@ -75,7 +80,6 @@ export default function Profile() {
         await axios.post('/api/profile/me/initialize', {}, {
           headers: { Authorization: `Bearer ${token}` }
         });
-        console.log('Profile initialized');
       } catch (err) {
         console.error('Error initializing profile:', err);
       }
@@ -99,6 +103,9 @@ export default function Profile() {
 
     // Fetch user's created projects and campaigns
     fetchUserCreations(currentUserId);
+
+    // Fetch real accepted-collaboration partners
+    fetchPartners(currentUserId);
 
     if (currentUserId === user?.id) {
       initializeProfile();
@@ -159,6 +166,19 @@ export default function Profile() {
     }
   };
 
+  const fetchPartners = async (targetId) => {
+    try {
+      setPartners([]);
+      if (!targetId) return;
+      const res = await fetch(`/api/collaborations/partners?userId=${targetId}`);
+      const data = await res.json();
+      setPartners(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Error fetching partners:', err);
+      setPartners([]);
+    }
+  };
+
   const getAuthToken = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     return session?.access_token || localStorage.getItem('auth_token');
@@ -175,7 +195,6 @@ export default function Profile() {
         .select('*')
         .eq('id', idToFetch)
         .single();
-
 
       if (error) throw error;
 
@@ -241,30 +260,23 @@ export default function Profile() {
 
       // Upload profile pic if changed to s3 on AWS
       if (editFormData.avatar) {
-        const response = await fetch(`/api/signUploadUrl`, {
+        const response = await apiFetch(`/api/signUploadUrl`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ fileName: editFormData.avatar.name, fileType: editFormData.avatar.type, userFirstName: user.id })
+          body: JSON.stringify({ fileName: editFormData.avatar.name, fileType: editFormData.avatar.type })
         });
 
         // use the signed url to upload the file to s3
-        const { url, key } = await response.json();
-        console.log("Got upload URL:", url);
-        console.log("Got file URL:", key);
+        const { url } = await response.json();
         const response2 = await fetch(url, {
           method: 'PUT',
           headers: { 'Content-Type': editFormData.avatar.type },
           body: editFormData.avatar
         });
         avatar_url = response2.url.split('?')[0]; // Get the URL without query params
-        console.log("Upload response:", response2);
       }
-
-
-
-
 
       // Update existing user profile
       const { error: updateError } = await supabase
@@ -277,7 +289,6 @@ export default function Profile() {
         .eq('id', user.id);
 
       if (updateError) throw updateError;
-
 
       // Refresh profile data
       await fetchUserProfile(user.id);
@@ -392,17 +403,18 @@ export default function Profile() {
     return [];
   };
 
-
+  const formatCount = (value) =>
+    value >= 1000000 ? `${(value / 1000000).toFixed(1)}M` : value >= 1000 ? `${(value / 1000).toFixed(1)}K` : value || 0;
 
   return (
     <>
       {/* Custom Confirm Modal */}
       {confirmModal.open && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={handleCancelConfirm}>
-          <div className="bg-[#101622] border border-white/10 rounded-2xl p-6 max-w-sm w-full shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in" onClick={handleCancelConfirm}>
+          <div className="gradient-ring bg-ink-850 rounded-2xl p-6 max-w-sm w-full shadow-card animate-pop-in" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-red-500/20 flex items-center justify-center shrink-0">
-                <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/25 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
                 </svg>
               </div>
@@ -410,576 +422,580 @@ export default function Profile() {
             </div>
             <p className="text-sm text-slate-400 mb-6 text-left">{confirmModal.message}</p>
             <div className="flex gap-3 justify-end">
-              <button
-                onClick={handleCancelConfirm}
-                className="px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg text-sm font-medium text-white transition-all"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirm}
-                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-all shadow-lg shadow-red-500/20"
-              >
-                Confirm
-              </button>
+              <button onClick={handleCancelConfirm} className="btn-secondary btn-md">Cancel</button>
+              <button onClick={handleConfirm} className="btn-danger btn-md">Confirm</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Content */}
-      <div className="max-w-7xl mx-auto px-8 py-8 space-y-8">
-        {apiError && (
-          <div className="bg-red-500/20 border border-red-500/50 text-red-100 p-4 rounded-xl flex items-center shadow-[0_0_15px_rgba(239,68,68,0.2)]">
-            <span>{apiError}</span>
-            <button className="ml-auto opacity-70 hover:opacity-100" onClick={() => setApiError(null)}>✕</button>
-          </div>
-        )}
-
-        {/* Edit Modal */}
-        {isEditMode && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <div className="bg-[#101622] border border-white/10 rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-              <div className="mb-6">
-                <h2 className="text-2xl font-bold text-white text-left mb-2">Edit Profile</h2>
-                {!profileData?.id && (
-                  <p className="text-sm text-slate-400">Welcome! Please fill in your profile information to get started.</p>
+      {/* Edit Profile Modal */}
+      <Modal
+        isOpen={isEditMode}
+        onClose={handleCancel}
+        title="Edit Profile"
+        subtitle={!profileData?.id ? 'Welcome! Please fill in your profile information to get started.' : 'Update how you appear across CollabHub.'}
+        maxWidth="max-w-xl"
+      >
+        <div className="p-7 space-y-6">
+          {/* Profile Picture */}
+          <div>
+            <label className="field-label mb-3">Profile Picture <span className="text-slate-500">(optional)</span></label>
+            <div className="flex items-end gap-4">
+              <div className="w-24 h-24 rounded-2xl overflow-hidden border border-white/10 flex items-center justify-center bg-gradient-to-br from-primary-600/40 to-violet-600/40">
+                {profilePicPreview ? (
+                  <img src={profilePicPreview} alt="Profile preview" className="w-full h-full object-cover" />
+                ) : (
+                  <span className="text-4xl font-bold text-white/60">{editFormData.display_name?.[0] || 'U'}</span>
                 )}
               </div>
+              <label className="flex-1 field cursor-pointer hover:bg-white/[0.07] text-center text-sm font-medium text-slate-300 hover:text-white">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleProfilePicChange}
+                  className="hidden"
+                />
+                Upload Picture
+              </label>
+            </div>
+          </div>
 
-              <div className="space-y-6">
-                {/* Profile Picture */}
-                <div>
-                  <label className="block text-sm font-semibold text-slate-200 mb-3 text-left">Profile Picture <span className="text-slate-400">(optional)</span></label>
-                  <div className="flex items-end gap-4">
-                    <div className="w-24 h-24 rounded-xl overflow-hidden border-2 border-white/10 flex items-center justify-center bg-slate-700">
-                      {profilePicPreview ? (
-                        <img src={profilePicPreview} alt="Profile preview" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-4xl font-bold text-white/50">{editFormData.display_name?.[0] || 'U'}</span>
-                      )}
-                    </div>
-                    <label className="flex-1 px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg cursor-pointer transition-all text-center text-sm font-medium text-white">
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={handleProfilePicChange}
-                        className="hidden"
-                      />
-                      Upload Picture
-                    </label>
-                  </div>
-                </div>
+          {/* Display Name */}
+          <div>
+            <label className="field-label">Display Name <span className="text-rose-400">*</span></label>
+            <input
+              type="text"
+              name="display_name"
+              value={editFormData.display_name}
+              onChange={handleEditFormChange}
+              className="field"
+              placeholder="Display name"
+              required
+            />
+          </div>
 
-                {/* First Name */}
-                <div>
-                  <label className="block text-sm font-semibold text-slate-200 mb-2 text-left">Display Name <span className="text-red-400">*</span></label>
-                  <input
-                    type="text"
-                    name="display_name"
-                    value={editFormData.display_name}
-                    onChange={handleEditFormChange}
-                    className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    placeholder="Display name"
-                    required
+          {/* Bio */}
+          <div>
+            <label className="field-label">Bio <span className="text-slate-500">(optional)</span></label>
+            <textarea
+              name="bio"
+              value={editFormData.bio}
+              onChange={handleEditFormChange}
+              rows="4"
+              className="field resize-none"
+              placeholder="Tell us about yourself…"
+            />
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3 pt-4 border-t border-white/10">
+            {profileData?.id && (
+              <button onClick={handleCancel} disabled={isSaving} className="btn-secondary btn-md flex-1">
+                Cancel
+              </button>
+            )}
+            <button onClick={handleSaveProfile} disabled={isSaving} className="btn-primary btn-md flex-1">
+              {isSaving ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  Saving…
+                </>
+              ) : (
+                'Save Changes'
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Content */}
+      <div className="w-full pb-24">
+        {/* ── Profile Hero ─────────────────────────────────────── */}
+        <div className="relative">
+          {/* Banner */}
+          <div className="h-56 sm:h-64 relative overflow-hidden border-b border-white/[0.07]">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary-900/40 via-ink-900 to-violet-900/30" />
+            <div className="absolute inset-0 grid-bg" />
+            <div className="absolute top-0 right-0 w-[32rem] h-[32rem] bg-gradient-to-l from-primary-500/15 to-transparent blur-3xl" />
+            <div className="absolute -bottom-24 -left-24 w-96 h-96 rounded-full bg-violet-600/15 blur-3xl" />
+          </div>
+
+          <div className="max-w-6xl mx-auto px-5 sm:px-8">
+            {apiError && (
+              <div className="alert-error mt-6 flex items-center">
+                <span>{apiError}</span>
+                <button className="ml-auto opacity-70 hover:opacity-100" onClick={() => setApiError(null)}>✕</button>
+              </div>
+            )}
+
+            <div className="relative -mt-16 sm:-mt-20 flex flex-col sm:flex-row gap-6 sm:items-end pb-8 border-b border-white/[0.07]">
+              {/* Avatar */}
+              <div className="gradient-ring rounded-3xl shrink-0 w-32 h-32 sm:w-40 sm:h-40 bg-ink-900 p-1.5 shadow-card animate-fade-up">
+                <div className="w-full h-full rounded-[1.15rem] overflow-hidden bg-gradient-to-br from-primary-700/60 to-violet-700/60">
+                  <SafeImage
+                    src={profileData?.avatar}
+                    alt="Profile"
+                    className="w-full h-full object-cover"
+                    fallback={
+                      <div className="w-full h-full flex items-center justify-center text-5xl sm:text-6xl font-bold font-display text-white/80">
+                        {profileData?.display_name?.[0] || user?.email?.[0]?.toUpperCase() || 'U'}
+                      </div>
+                    }
                   />
                 </div>
+              </div>
 
-                {/* Bio */}
-                <div>
-                  <label className="block text-sm font-semibold text-slate-200 mb-2 text-left">Bio <span className="text-slate-400">(optional)</span></label>
-                  <textarea
-                    name="bio"
-                    value={editFormData.bio}
-                    onChange={handleEditFormChange}
-                    rows="4"
-                    className="w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-                    placeholder="Tell us about yourself..."
-                  />
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex gap-3 pt-4">
-                  {profileData?.id && (
-                    <button
-                      onClick={handleCancel}
-                      disabled={isSaving}
-                      className="flex-1 px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 rounded-lg text-white font-medium transition-all disabled:opacity-50"
-                    >
-                      Cancel
-                    </button>
+              {/* Profile Info */}
+              <div className="flex-1 text-left animate-fade-up" style={{ animationDelay: '.08s' }}>
+                <div className="flex items-center gap-3 flex-wrap mb-1.5">
+                  <h1 className="text-3xl sm:text-4xl font-bold text-white">
+                    {profileData ? `${profileData.display_name || ''}` : 'Your Profile'}
+                  </h1>
+                  {profileData?.role && (
+                    <span className={profileData.role === 'creator' ? 'chip-emerald capitalize' : 'chip-amber capitalize'}>
+                      {profileData.role}
+                    </span>
                   )}
-                  <button
-                    onClick={handleSaveProfile}
-                    disabled={isSaving}
-                    className="flex-1 px-4 py-2 bg-[#1152d4] hover:bg-blue-700 text-white font-medium rounded-lg transition-all disabled:opacity-50 flex items-center justify-center gap-2"
-                  >
-                    {isSaving ? (
-                      <>
-                        <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-                        Saving...
-                      </>
-                    ) : (
-                      'Save Changes'
-                    )}
+                  {youtubeStatus?.connected && (
+                    <span className="chip-indigo">
+                      <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 24 24"><path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      Verified analytics
+                    </span>
+                  )}
+                </div>
+                <p className="text-slate-400 text-sm max-w-2xl leading-relaxed">
+                  {profileData?.bio || 'Building communities and creating authentic content that inspires millions. Partnering with brands that align with my values.'}
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 shrink-0 animate-fade-up" style={{ animationDelay: '.14s' }}>
+                {isOwnProfile ? (
+                  <button onClick={() => setIsEditMode(true)} className="btn-primary btn-md">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                    Edit Profile
                   </button>
-                </div>
+                ) : (
+                  <button onClick={() => setShowCollabModal(true)} className="btn-primary btn-md">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                    Collaborate
+                  </button>
+                )}
               </div>
             </div>
           </div>
-        )}
-
-        {/* Profile Header Section */}
-        <div className="space-y-0">
-          {/* Banner with Profile Overlay */}
-          <div className="relative group">
-            {/* Banner Background */}
-            <div className="backdrop-blur-sm bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-t-3xl overflow-hidden h-64">
-              <div className="absolute inset-0 bg-gradient-to-b from-cyan-500/10 via-blue-500/5 to-transparent opacity-40"></div>
-              <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-l from-blue-500/20 to-transparent blur-3xl"></div>
-            </div>
-
-            {/* Profile Card Overlay */}
-            <div className="relative -mt-20 mx-8 pb-8">
-              <div className="flex gap-6 items-end">
-                {/* Avatar */}
-                <div className="border-4 border-[#101622] bg-gradient-to-br from-slate-700 to-slate-900 rounded-2xl overflow-hidden shadow-2xl shrink-0">
-                  {profileData?.avatar ? (
-                    <img src={profileData.avatar} alt="Profile" className="w-40 h-40 object-cover" />
-                  ) : (
-                    <div className="w-40 h-40 flex items-center justify-center text-6xl font-bold">
-                      {profileData?.display_name?.[0] || user?.email?.[0]?.toUpperCase() || 'U'}
-                    </div>
-                  )}
-                </div>
-
-                {/* Profile Info */}
-                <div className="flex-1 pb-2">
-                  <div className="flex items-center gap-2 mb-1">
-                    <h1 className="text-4xl font-bold">
-                      {profileData
-                        ? `${profileData.display_name || ''}`
-                        : 'Your Profile'}
-                    </h1>
-
-                  </div>
-                  <p className="text-slate-300 text-lg mb-2 text-left">{profileData?.role?.toUpperCase()}</p>
-                  <p className="text-slate-400 text-sm max-w-2xl mb-4 text-left">
-                    {profileData?.bio || 'Building communities and creating authentic content that inspires millions. Partnering with brands that align with my values.'}
-                  </p>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex gap-3 pb-2 shrink-0">
-                  {isOwnProfile && (
-                    <button
-                      onClick={() => setIsEditMode(true)}
-                      className="px-6 py-2 bg-[#1152d4] hover:bg-blue-700 text-white font-semibold rounded-lg transition-all shadow-lg shadow-blue-500/20"
-                    >
-                      Edit
-                    </button>
-                  )}
-                  {!isOwnProfile && (
-                    <button
-                      onClick={() => setShowCollabModal(true)}
-                      className="px-5 py-2 backdrop-blur-sm bg-[rgba(17,82,212,0.15)] border border-[rgba(17,82,212,0.3)] hover:bg-[rgba(17,82,212,0.3)] text-white rounded-lg transition-all flex items-center gap-2 font-medium text-sm shadow-lg shadow-blue-500/10"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                      </svg>
-                      Collaborate
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-
-
         </div>
 
-        {/* Main Grid */}
-        <div className="space-y-8">
-          {/* Left Column - Portfolio & YouTube Integration */}
-          <div className="space-y-8">
-            {/* Portfolio Section */}
-            <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-2xl p-8 backdrop-blur-sm">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-2">
-                  <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M4 4h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2z" />
-                  </svg>
-                  <h2 className="text-2xl font-bold">Portfolio</h2>
-                </div>
-                <div className="flex gap-2">
-                  {['YouTube', 'Instagram'].map((tab) => (
-                    <button
-                      key={tab}
-                      onClick={() => setPortfolioTab(tab)}
-                      className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${portfolioTab === tab
-                        ? 'bg-[#1152d4] text-white shadow-lg shadow-blue-500/20'
-                        : 'bg-white/5 text-slate-300 hover:bg-white/10'
-                        }`}
-                    >
-                      {tab}
-                    </button>
-                  ))}
-                </div>
+        {/* ── Main content ─────────────────────────────────────── */}
+        <div className="max-w-6xl mx-auto px-5 sm:px-8 mt-10 space-y-10">
+          {/* Portfolio Section */}
+          <div className="glass p-6 sm:p-8">
+            <div className="flex items-center justify-between mb-7 flex-wrap gap-3">
+              <div className="text-left">
+                <p className="eyebrow mb-1">Verified reach</p>
+                <h2 className="text-2xl font-bold text-white">Portfolio</h2>
               </div>
+              <div className="bg-white/[0.03] p-1 rounded-xl border border-white/[0.06] flex text-sm">
+                {['YouTube', 'Instagram'].map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setPortfolioTab(tab)}
+                    className={`px-5 py-2 rounded-lg font-semibold transition-all ${portfolioTab === tab
+                      ? 'bg-white/10 text-white'
+                      : 'text-slate-400 hover:text-white'}`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-              {/* Portfolio Content */}
-              {portfolioTab === 'YouTube' ? (
-                <div className="space-y-6">
-                  {youtubeStatus?.connected && youtubeAnalytics?.connected ? (
-                    <>
-                      {/* Channel Info Bar */}
-                      <div className="flex items-center gap-4 p-4 bg-white/5 rounded-xl border border-white/5">
-                        {youtubeAnalytics.channel?.thumbnail && (
-                          <img src={youtubeAnalytics.channel.thumbnail} alt="Channel" className="w-12 h-12 rounded-full border-2 border-red-500/30" crossOrigin="anonymous" />
-                        )}
-                        <div className="flex-1">
-                          <p className="font-semibold text-white text-left">{youtubeAnalytics.channel?.title}</p>
-                          <p className="text-xs text-slate-400 text-left">YouTube Channel</p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {youtubeAnalytics?.analytics_updated_at && (
-                            <span className="text-xs text-slate-500">
-                              Updated {new Date(youtubeAnalytics.analytics_updated_at).toLocaleDateString()}
-                            </span>
-                          )}
-                          <span className="inline-flex items-center px-3 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-full text-xs font-semibold text-emerald-300">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-2 animate-pulse"></span>
-                            Connected
-                          </span>
-                          {isOwnProfile && (
-                            <button onClick={disconnectYoutube} className="px-3 py-1.5 text-xs bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/30 rounded-lg text-slate-300 hover:text-red-300 transition-all">
-                              Disconnect
-                            </button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Stats Grid */}
-                      <div className="grid grid-cols-3 gap-3">
-                        {[
-                          { label: 'Subscribers', value: youtubeAnalytics.channel?.subscriber_count, color: 'text-red-400', border: 'border-l-red-500' },
-                          { label: 'Total Views', value: youtubeAnalytics.channel?.view_count, color: 'text-blue-400', border: 'border-l-blue-500' },
-                          { label: 'Videos', value: youtubeAnalytics.channel?.video_count, color: 'text-emerald-400', border: 'border-l-emerald-500' },
-                        ].map((stat, idx) => (
-                          <div key={idx} className={`bg-white/5 rounded-xl p-4 border-l-4 ${stat.border} border border-white/5`}>
-                            <p className="text-xs text-slate-400 font-medium uppercase tracking-wider mb-1">{stat.label}</p>
-                            <p className={`text-xl font-bold ${stat.color}`}>
-                              {stat.value >= 1000000 ? `${(stat.value / 1000000).toFixed(1)}M` : stat.value >= 1000 ? `${(stat.value / 1000).toFixed(1)}K` : stat.value || 0}
-                            </p>
+            {/* Portfolio Content */}
+            {portfolioTab === 'YouTube' ? (
+              <div className="space-y-6">
+                {youtubeStatus?.connected && youtubeAnalytics?.connected ? (
+                  <>
+                    {/* Channel Info Bar */}
+                    <div className="flex items-center gap-4 p-4 bg-white/[0.04] rounded-2xl border border-white/[0.06] flex-wrap">
+                      <SafeImage
+                        src={youtubeAnalytics.channel?.thumbnail}
+                        alt="Channel"
+                        className="w-12 h-12 rounded-full border-2 border-rose-500/30"
+                        crossOrigin="anonymous"
+                        fallback={
+                          <div className="w-12 h-12 rounded-full border-2 border-rose-500/30 bg-rose-500/15 flex items-center justify-center text-rose-300 font-bold">
+                            {youtubeAnalytics.channel?.title?.[0]?.toUpperCase() || 'Y'}
                           </div>
-                        ))}
+                        }
+                      />
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="font-semibold text-white truncate">{youtubeAnalytics.channel?.title}</p>
+                        <p className="text-xs text-slate-500">YouTube Channel</p>
                       </div>
+                      <div className="flex items-center gap-3 flex-wrap">
+                        {youtubeAnalytics?.analytics_updated_at && (
+                          <span className="text-xs text-slate-500">
+                            Updated {new Date(youtubeAnalytics.analytics_updated_at).toLocaleDateString()}
+                          </span>
+                        )}
+                        <span className="chip-emerald">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse" />
+                          Connected
+                        </span>
+                        {isOwnProfile && (
+                          <button onClick={disconnectYoutube} className="btn btn-sm text-slate-300 bg-white/5 border border-white/10 hover:bg-rose-500/15 hover:border-rose-500/30 hover:text-rose-300 rounded-lg">
+                            Disconnect
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-                      {/* Views Trend Chart */}
-                      {youtubeAnalytics.analytics?.views_trend?.length > 0 && (
-                        <div>
-                          <p className="text-xs text-slate-400 font-bold tracking-wider mb-3 uppercase">Views Trend (30 Days)</p>
-                          <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                            <ResponsiveContainer width="100%" height={200}>
-                              <AreaChart data={youtubeAnalytics.analytics.views_trend}>
-                                <defs>
-                                  <linearGradient id="viewsGradientPortfolio" x1="0" y1="0" x2="0" y2="1">
-                                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.3} />
-                                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
-                                  </linearGradient>
-                                </defs>
-                                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                                <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} />
-                                <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} />
-                                <Tooltip contentStyle={{ background: '#1e293b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '12px' }} />
-                                <Area type="monotone" dataKey="views" stroke="#ef4444" fill="url(#viewsGradientPortfolio)" strokeWidth={2} />
-                              </AreaChart>
-                            </ResponsiveContainer>
+                    {/* Stats Grid */}
+                    <div className="grid grid-cols-3 gap-4">
+                      {[
+                        { label: 'Subscribers', value: youtubeAnalytics.channel?.subscriber_count, color: 'text-rose-300', glow: 'from-rose-500/10' },
+                        { label: 'Total Views', value: youtubeAnalytics.channel?.view_count, color: 'text-primary-300', glow: 'from-primary-500/10' },
+                        { label: 'Videos', value: youtubeAnalytics.channel?.video_count, color: 'text-emerald-300', glow: 'from-emerald-500/10' },
+                      ].map((stat, idx) => (
+                        <div key={idx} className={`relative overflow-hidden bg-white/[0.04] rounded-2xl p-5 border border-white/[0.06] text-left`}>
+                          <div className={`absolute -top-8 -right-8 w-24 h-24 rounded-full bg-gradient-to-br ${stat.glow} to-transparent blur-xl`} />
+                          <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">{stat.label}</p>
+                          <p className={`text-2xl font-bold font-display ${stat.color}`}>{formatCount(stat.value)}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Views Trend Chart */}
+                    {youtubeAnalytics.analytics?.views_trend?.length > 0 && (
+                      <div className="text-left">
+                        <p className="text-xs text-slate-500 font-bold tracking-widest mb-3 uppercase">Views Trend (30 Days)</p>
+                        <div className="bg-white/[0.03] rounded-2xl p-4 border border-white/[0.06]">
+                          <ResponsiveContainer width="100%" height={220}>
+                            <AreaChart data={youtubeAnalytics.analytics.views_trend}>
+                              <defs>
+                                <linearGradient id="viewsGradientPortfolio" x1="0" y1="0" x2="0" y2="1">
+                                  <stop offset="5%" stopColor="#8290ff" stopOpacity={0.35} />
+                                  <stop offset="95%" stopColor="#8290ff" stopOpacity={0} />
+                                </linearGradient>
+                              </defs>
+                              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                              <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} />
+                              <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} axisLine={false} tickLine={false} />
+                              <Tooltip contentStyle={{ background: '#0c101d', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', fontSize: '12px' }} />
+                              <Area type="monotone" dataKey="views" stroke="#8290ff" fill="url(#viewsGradientPortfolio)" strokeWidth={2.5} />
+                            </AreaChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Traffic Sources & Device Breakdown */}
+                    <div className="grid sm:grid-cols-2 gap-5">
+                      {youtubeAnalytics.analytics?.traffic_sources?.length > 0 && (
+                        <div className="text-left">
+                          <p className="text-xs text-slate-500 font-bold tracking-widest mb-3 uppercase">Traffic Sources</p>
+                          <div className="space-y-2.5 bg-white/[0.03] rounded-2xl p-4 border border-white/[0.06]">
+                            {youtubeAnalytics.analytics.traffic_sources.slice(0, 5).map((src, idx) => (
+                              <div key={idx}>
+                                <div className="flex justify-between text-xs mb-1">
+                                  <span className="text-slate-300">{src.name}</span>
+                                  <span className="text-primary-300 font-semibold">{src.value}%</span>
+                                </div>
+                                <div className="w-full bg-white/[0.06] rounded-full h-1.5 overflow-hidden">
+                                  <div className="bg-gradient-to-r from-primary-500 to-cyan-400 h-1.5 rounded-full transition-all duration-500" style={{ width: `${src.value}%` }}></div>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
-
-                      {/* Traffic Sources & Device Breakdown */}
-                      <div className="grid grid-cols-2 gap-4">
-                        {youtubeAnalytics.analytics?.traffic_sources?.length > 0 && (
-                          <div>
-                            <p className="text-xs text-slate-400 font-bold tracking-wider mb-3 uppercase">Traffic Sources</p>
-                            <div className="space-y-2">
-                              {youtubeAnalytics.analytics.traffic_sources.slice(0, 5).map((src, idx) => (
-                                <div key={idx}>
-                                  <div className="flex justify-between text-xs mb-1">
-                                    <span className="text-slate-300">{src.name}</span>
-                                    <span className="text-blue-400 font-semibold">{src.value}%</span>
-                                  </div>
-                                  <div className="w-full bg-slate-700/30 rounded-full h-1.5 overflow-hidden">
-                                    <div className="bg-gradient-to-r from-blue-500 to-cyan-400 h-1.5 rounded-full transition-all duration-500" style={{ width: `${src.value}%` }}></div>
-                                  </div>
+                      {youtubeAnalytics.analytics?.device_breakdown?.length > 0 && (
+                        <div className="text-left">
+                          <p className="text-xs text-slate-500 font-bold tracking-widest mb-3 uppercase">Devices</p>
+                          <div className="space-y-2 bg-white/[0.03] rounded-2xl p-4 border border-white/[0.06]">
+                            {youtubeAnalytics.analytics.device_breakdown.map((dev, idx) => {
+                              const icons = { Mobile: '📱', Desktop: '🖥️', Tablet: '📟', Tv: '📺', 'Game Console': '🎮' };
+                              return (
+                                <div key={idx} className="flex items-center gap-2.5 p-2 bg-white/[0.03] rounded-lg">
+                                  <span className="text-sm">{icons[dev.name] || '📟'}</span>
+                                  <span className="text-xs text-slate-300 flex-1 text-left">{dev.name}</span>
+                                  <span className="text-xs font-semibold text-violet-300">{dev.value}%</span>
                                 </div>
-                              ))}
-                            </div>
+                              );
+                            })}
                           </div>
-                        )}
-                        {youtubeAnalytics.analytics?.device_breakdown?.length > 0 && (
-                          <div>
-                            <p className="text-xs text-slate-400 font-bold tracking-wider mb-3 uppercase">Devices</p>
-                            <div className="space-y-2">
-                              {youtubeAnalytics.analytics.device_breakdown.map((dev, idx) => {
-                                const icons = { Mobile: '📱', Desktop: '🖥️', Tablet: '📟', Tv: '📺', 'Game Console': '🎮' };
-                                return (
-                                  <div key={idx} className="flex items-center gap-2 p-2 bg-white/5 rounded-lg">
-                                    <span className="text-sm">{icons[dev.name] || '📟'}</span>
-                                    <span className="text-xs text-slate-300 flex-1">{dev.name}</span>
-                                    <span className="text-xs font-semibold text-purple-400">{dev.value}%</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                        </div>
+                      )}
+                    </div>
 
-                      {/* Audience Insights */}
-                      {(youtubeAnalytics.analytics?.audience_age?.length > 0 || youtubeAnalytics.analytics?.audience_gender || youtubeAnalytics.analytics?.audience_regions?.length > 0) && (
-                        <div>
-                          <p className="text-xs text-slate-400 font-bold tracking-wider mb-3 uppercase">Audience Insights</p>
-                          <div className="grid grid-cols-2 gap-4">
-                            {/* Age Distribution */}
-                            {youtubeAnalytics.analytics?.audience_age?.length > 0 && (
-                              <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                                <p className="text-xs text-slate-400 font-medium mb-3">Age Distribution</p>
-                                <div className="space-y-2">
-                                  {youtubeAnalytics.analytics.audience_age.slice(0, 5).map((age, idx) => (
-                                    <div key={idx}>
-                                      <div className="flex justify-between text-xs mb-1">
-                                        <span className="text-slate-300">{age.name}</span>
-                                        <span className="text-blue-400 font-semibold">{age.value}%</span>
-                                      </div>
-                                      <div className="w-full bg-slate-700/30 rounded-full h-2 overflow-hidden">
-                                        <div className="bg-gradient-to-r from-blue-500 to-blue-400 h-2 rounded-full transition-all duration-500" style={{ width: `${age.value}%` }}></div>
-                                      </div>
+                    {/* Audience Insights */}
+                    {(youtubeAnalytics.analytics?.audience_age?.length > 0 || youtubeAnalytics.analytics?.audience_gender || youtubeAnalytics.analytics?.audience_regions?.length > 0) && (
+                      <div className="text-left">
+                        <p className="text-xs text-slate-500 font-bold tracking-widest mb-3 uppercase">Audience Insights</p>
+                        <div className="grid sm:grid-cols-2 gap-5">
+                          {/* Age Distribution */}
+                          {youtubeAnalytics.analytics?.audience_age?.length > 0 && (
+                            <div className="bg-white/[0.03] rounded-2xl p-4 border border-white/[0.06]">
+                              <p className="text-xs text-slate-400 font-medium mb-3">Age Distribution</p>
+                              <div className="space-y-2.5">
+                                {youtubeAnalytics.analytics.audience_age.slice(0, 5).map((age, idx) => (
+                                  <div key={idx}>
+                                    <div className="flex justify-between text-xs mb-1">
+                                      <span className="text-slate-300">{age.name}</span>
+                                      <span className="text-primary-300 font-semibold">{age.value}%</span>
+                                    </div>
+                                    <div className="w-full bg-white/[0.06] rounded-full h-2 overflow-hidden">
+                                      <div className="bg-gradient-to-r from-primary-500 to-primary-400 h-2 rounded-full transition-all duration-500" style={{ width: `${age.value}%` }}></div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          {/* Gender & Regions */}
+                          <div className="space-y-5">
+                            {/* Gender Split */}
+                            <div className="bg-white/[0.03] rounded-2xl p-4 border border-white/[0.06]">
+                              <p className="text-xs text-slate-400 font-medium mb-3">Gender Split</p>
+                              <div className="flex gap-2.5">
+                                <div className="flex-1 bg-primary-600/15 border border-primary-600/30 rounded-xl p-2.5 text-center">
+                                  <p className="text-xs text-slate-400 mb-1">Male</p>
+                                  <p className="text-sm font-bold text-primary-300">{youtubeAnalytics.analytics?.audience_gender?.male || 0}%</p>
+                                </div>
+                                <div className="flex-1 bg-violet-600/15 border border-violet-600/30 rounded-xl p-2.5 text-center">
+                                  <p className="text-xs text-slate-400 mb-1">Female</p>
+                                  <p className="text-sm font-bold text-violet-300">{youtubeAnalytics.analytics?.audience_gender?.female || 0}%</p>
+                                </div>
+                              </div>
+                            </div>
+                            {/* Top Locations */}
+                            {youtubeAnalytics.analytics?.audience_regions?.length > 0 && (
+                              <div className="bg-white/[0.03] rounded-2xl p-4 border border-white/[0.06]">
+                                <p className="text-xs text-slate-400 font-medium mb-3">Top Locations</p>
+                                <div className="space-y-1.5 text-xs">
+                                  {youtubeAnalytics.analytics.audience_regions.slice(0, 5).map((region, idx) => (
+                                    <div key={idx} className="flex justify-between text-slate-300">
+                                      <span>🌐 {region.name}</span>
+                                      <span className="text-slate-500 font-semibold">{region.value}%</span>
                                     </div>
                                   ))}
                                 </div>
                               </div>
                             )}
-                            {/* Gender & Regions */}
-                            <div className="space-y-4">
-                              {/* Gender Split */}
-                              <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                                <p className="text-xs text-slate-400 font-medium mb-3">Gender Split</p>
-                                <div className="flex gap-2">
-                                  <div className="flex-1 bg-blue-600/20 border border-blue-600/40 rounded-lg p-2 text-center">
-                                    <p className="text-xs text-slate-400 mb-1">Male</p>
-                                    <p className="text-sm font-bold text-blue-400">{youtubeAnalytics.analytics?.audience_gender?.male || 0}%</p>
-                                  </div>
-                                  <div className="flex-1 bg-purple-600/20 border border-purple-600/40 rounded-lg p-2 text-center">
-                                    <p className="text-xs text-slate-400 mb-1">Female</p>
-                                    <p className="text-sm font-bold text-purple-400">{youtubeAnalytics.analytics?.audience_gender?.female || 0}%</p>
-                                  </div>
-                                </div>
-                              </div>
-                              {/* Top Locations */}
-                              {youtubeAnalytics.analytics?.audience_regions?.length > 0 && (
-                                <div className="bg-white/5 rounded-xl p-4 border border-white/5">
-                                  <p className="text-xs text-slate-400 font-medium mb-3">Top Locations</p>
-                                  <div className="space-y-1 text-xs">
-                                    {youtubeAnalytics.analytics.audience_regions.slice(0, 5).map((region, idx) => (
-                                      <div key={idx} className="flex justify-between text-slate-300">
-                                        <span>🌐 {region.name}</span>
-                                        <span className="text-slate-500 font-semibold">{region.value}%</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
                           </div>
                         </div>
-                      )}
+                      </div>
+                    )}
 
-                      {youtubeAnalytics.token_error && (
-                        <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-300 flex items-center gap-2">
-                          <span>⚠️</span>
-                          <span>Token expired. Please reconnect your YouTube account to refresh analytics.</span>
-                          {isOwnProfile && (
-                            <button onClick={connectYoutube} className="ml-auto px-3 py-1 bg-amber-500/20 hover:bg-amber-500/30 rounded text-amber-200 font-medium transition-all">Reconnect</button>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  ) : isOwnProfile ? (
-                    <div className="text-center py-12">
-                      <svg viewBox="0 0 24 24" className="w-12 h-12 fill-red-600 mx-auto mb-4 opacity-50">
+                    {youtubeAnalytics.token_error && (
+                      <div className="p-3.5 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs text-amber-300 flex items-center gap-2 flex-wrap">
+                        <span>⚠️</span>
+                        <span>Token expired. Please reconnect your YouTube account to refresh analytics.</span>
+                        {isOwnProfile && (
+                          <button onClick={connectYoutube} className="ml-auto px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 rounded-lg text-amber-200 font-medium transition-all">Reconnect</button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : isOwnProfile ? (
+                  <div className="text-center py-14">
+                    <div className="w-16 h-16 mx-auto mb-5 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center">
+                      <svg viewBox="0 0 24 24" className="w-8 h-8 fill-rose-500">
                         <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
                       </svg>
-                      <p className="text-slate-400 text-sm mb-4">Connect your YouTube channel to display analytics</p>
-                      <button
-                        onClick={connectYoutube}
-                        disabled={loading || redirecting}
-                        className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-500 hover:to-red-600 text-white font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-red-500/20 hover:shadow-red-500/30"
-                      >
-                        {redirecting ? 'Redirecting...' : '▶ Connect YouTube Channel'}
-                      </button>
                     </div>
-                  ) : (
-                    <div className="text-center py-12 text-slate-500 text-sm">
-                      <p>No YouTube channel connected</p>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                /* Instagram Tab - Coming Soon */
-                <div className="text-center py-16">
-                  <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 flex items-center justify-center opacity-50">
-                    <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
-                      <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" />
-                    </svg>
+                    <p className="text-white font-semibold mb-1">Showcase your verified reach</p>
+                    <p className="text-slate-400 text-sm mb-6">Connect your YouTube channel to display first-party analytics.</p>
+                    <button
+                      onClick={connectYoutube}
+                      disabled={loading || redirecting}
+                      className="btn btn-lg text-white bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 shadow-lg shadow-rose-500/25 hover:scale-[1.02] active:scale-[0.98]"
+                    >
+                      {redirecting ? 'Redirecting…' : '▶ Connect YouTube Channel'}
+                    </button>
                   </div>
-                  <p className="text-slate-400 text-sm">Instagram analytics coming soon</p>
+                ) : (
+                  <div className="text-center py-14 text-slate-500 text-sm">
+                    <p>No YouTube channel connected</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              /* Instagram Tab - Coming Soon */
+              <div className="text-center py-16">
+                <div className="w-16 h-16 mx-auto mb-5 rounded-2xl bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 flex items-center justify-center opacity-60">
+                  <svg className="w-8 h-8 text-white" fill="currentColor" viewBox="0 0 24 24">
+                    <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z" />
+                  </svg>
                 </div>
-              )}
+                <p className="text-slate-400 text-sm">Instagram analytics coming soon</p>
+              </div>
+            )}
+          </div>
+
+          {/* Created Projects Section */}
+          {userProjects.length > 0 && (
+            <div className="glass p-6 sm:p-8">
+              <div className="text-left mb-7">
+                <p className="eyebrow mb-1">Creator work</p>
+                <h2 className="text-2xl font-bold text-white">Projects</h2>
+              </div>
+              <div className="stagger-children grid sm:grid-cols-2 gap-5">
+                {userProjects.map(project => (
+                  <div key={project.id} className="hover-lift glass card-hover overflow-hidden group">
+                    {/* Project Image */}
+                    <div className="relative h-40 bg-gradient-to-br from-primary-900/50 to-ink-900 cursor-pointer" onClick={() => navigate(`/projects/${project.id}`)}>
+                      <SafeImage
+                        src={project.image}
+                        alt={project.project_name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        fallback={
+                          <div className="w-full h-full flex items-center justify-center">
+                            <svg className="w-10 h-10 text-primary-500/25" fill="currentColor" viewBox="0 0 24 24">
+                              <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" />
+                            </svg>
+                          </div>
+                        }
+                      />
+                      {isOwnProfile && (
+                        <div className="absolute top-2.5 right-2.5 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); navigate(`/projects/${project.id}`); }}
+                            className="px-2.5 py-1 text-xs font-semibold bg-primary-500/85 hover:bg-primary-500 text-white rounded-lg backdrop-blur-sm transition-all"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteProject(project.id); }}
+                            className="px-2.5 py-1 text-xs font-semibold bg-rose-500/85 hover:bg-rose-500 text-white rounded-lg backdrop-blur-sm transition-all"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {/* Project Info */}
+                    <div className="p-5 cursor-pointer text-left" onClick={() => navigate(`/projects/${project.id}`)}>
+                      <h3 className="font-semibold text-white group-hover:text-primary-300 transition-colors">{project.project_name}</h3>
+                      <p className="text-sm text-slate-400 mt-1 line-clamp-2">{project.description || 'No description'}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {safeJsonParse(project.genre).map((g, idx) =>
+                          g && <span key={`genre-${idx}`} className="chip-indigo">{g}</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
+          )}
 
-
-
-            {/* Created Projects Section */}
-            {userProjects.length > 0 && (
-              <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-2xl p-8 backdrop-blur-sm">
-                <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-                  <svg className="w-6 h-6 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M4 4h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2z" />
-                  </svg>
-                  Projects
-                </h2>
-                <div className="grid grid-cols-2 gap-4">
-                  {userProjects.map(project => (
-                    <div key={project.id} className="bg-white/5 border border-white/10 rounded-xl overflow-hidden hover:bg-white/[0.07] transition-all group">
-                      {/* Project Image */}
-                      <div className="relative h-40 bg-gradient-to-br from-blue-900/50 to-slate-900 cursor-pointer" onClick={() => navigate(`/projects/${project.id}`)}>
-                        {project.image ? (
-                          <img src={project.image} alt={project.project_name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                        ) : (
+          {/* Created Campaigns Section */}
+          {userCampaigns.length > 0 && (
+            <div className="glass p-6 sm:p-8">
+              <div className="text-left mb-7">
+                <p className="eyebrow mb-1">Brand work</p>
+                <h2 className="text-2xl font-bold text-white">{isOwnProfile ? 'My Campaigns' : 'Campaigns'}</h2>
+              </div>
+              <div className="stagger-children grid sm:grid-cols-2 gap-5">
+                {userCampaigns.map(campaign => (
+                  <div key={campaign.id} className="hover-lift glass overflow-hidden group transition-all duration-300 hover:bg-white/[0.05] hover:border-violet-500/30 hover:shadow-glow-violet">
+                    {/* Campaign Image */}
+                    <div className="relative h-40 bg-gradient-to-br from-violet-900/50 to-ink-900 cursor-pointer" onClick={() => navigate(`/campaigns/${campaign.id}`)}>
+                      <SafeImage
+                        src={campaign.image}
+                        alt={campaign.campaign_name}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
+                        fallback={
                           <div className="w-full h-full flex items-center justify-center">
-                            <svg className="w-10 h-10 text-blue-500/30" fill="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-10 h-10 text-violet-500/25" fill="currentColor" viewBox="0 0 24 24">
                               <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" />
                             </svg>
                           </div>
-                        )}
-                        {isOwnProfile && (
-                          <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); navigate(`/projects/${project.id}`); }}
-                              className="px-2.5 py-1 text-xs bg-blue-500/80 hover:bg-blue-500 text-white rounded-md backdrop-blur-sm transition-all"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); deleteProject(project.id); }}
-                              className="px-2.5 py-1 text-xs bg-red-500/80 hover:bg-red-500 text-white rounded-md backdrop-blur-sm transition-all"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      {/* Project Info */}
-                      <div className="p-4 cursor-pointer" onClick={() => navigate(`/projects/${project.id}`)}>
-                        <h3 className="font-semibold text-white group-hover:text-blue-400 transition-colors text-left">{project.project_name}</h3>
-                        <p className="text-sm text-slate-400 mt-1 line-clamp-2 text-left">{project.description || 'No description'}</p>
-                        <div className="flex flex-wrap gap-2 mt-3">
-                          {safeJsonParse(project.genre).map((g, idx) =>
-                            g && <span key={`genre-${idx}`} className="inline-flex items-center px-2 py-1 rounded text-xs bg-blue-500/20 text-blue-300">{g}</span>
-                          )}
+                        }
+                      />
+                      {isOwnProfile && (
+                        <div className="absolute top-2.5 right-2.5 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); navigate(`/campaigns/${campaign.id}`); }}
+                            className="px-2.5 py-1 text-xs font-semibold bg-violet-500/85 hover:bg-violet-500 text-white rounded-lg backdrop-blur-sm transition-all"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); deleteCampaign(campaign.id); }}
+                            className="px-2.5 py-1 text-xs font-semibold bg-rose-500/85 hover:bg-rose-500 text-white rounded-lg backdrop-blur-sm transition-all"
+                          >
+                            Delete
+                          </button>
                         </div>
+                      )}
+                    </div>
+                    {/* Campaign Info */}
+                    <div className="p-5 cursor-pointer text-left" onClick={() => navigate(`/campaigns/${campaign.id}`)}>
+                      <h3 className="font-semibold text-white group-hover:text-violet-300 transition-colors">{campaign.campaign_name}</h3>
+                      <p className="text-sm text-slate-400 mt-1 line-clamp-2">{campaign.description || 'No description'}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-3">
+                        {safeJsonParse(campaign.platforms).map((p, idx) =>
+                          p && <span key={`plat-${idx}`} className="chip-violet">{p}</span>
+                        )}
                       </div>
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
-            )}
+            </div>
+          )}
 
-            {/* Created Campaigns Section */}
-            {userCampaigns.length > 0 && (
-              <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-2xl p-8 backdrop-blur-sm">
-                <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-                  <svg className="w-6 h-6 text-purple-400" fill="currentColor" viewBox="0 0 24 24">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm0-13c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5z" />
-                  </svg>
-                  {isOwnProfile ? 'My Campaigns' : 'Campaigns'}
-                </h2>
-                <div className="grid grid-cols-2 gap-4">
-                  {userCampaigns.map(campaign => (
-                    <div key={campaign.id} className="bg-white/5 border border-white/10 rounded-xl overflow-hidden hover:bg-white/[0.07] transition-all group">
-                      {/* Campaign Image */}
-                      <div className="relative h-40 bg-gradient-to-br from-purple-900/50 to-slate-900 cursor-pointer" onClick={() => navigate(`/campaigns/${campaign.id}`)}>
-                        {campaign.image ? (
-                          <img src={campaign.image} alt={campaign.campaign_name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center">
-                            <svg className="w-10 h-10 text-purple-500/30" fill="currentColor" viewBox="0 0 24 24">
-                              <path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z" />
-                            </svg>
-                          </div>
-                        )}
-                        {isOwnProfile && (
-                          <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); navigate(`/campaigns/${campaign.id}`); }}
-                              className="px-2.5 py-1 text-xs bg-purple-500/80 hover:bg-purple-500 text-white rounded-md backdrop-blur-sm transition-all"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); deleteCampaign(campaign.id); }}
-                              className="px-2.5 py-1 text-xs bg-red-500/80 hover:bg-red-500 text-white rounded-md backdrop-blur-sm transition-all"
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                      {/* Campaign Info */}
-                      <div className="p-4 cursor-pointer" onClick={() => navigate(`/campaigns/${campaign.id}`)}>
-                        <h3 className="font-semibold text-white group-hover:text-purple-400 transition-colors text-left">{campaign.campaign_name}</h3>
-                        <p className="text-sm text-slate-400 mt-1 line-clamp-2 text-left">{campaign.description || 'No description'}</p>
-                        <div className="flex flex-wrap gap-2 mt-3">
-                          {safeJsonParse(campaign.platforms).map((p, idx) =>
-                            p && <span key={`plat-${idx}`} className="inline-flex items-center px-2 py-1 rounded text-xs bg-purple-500/20 text-purple-300">{p}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+          {/* Empty state — own profile with no creations yet */}
+          {isOwnProfile && !loadingCreations && userProjects.length === 0 && userCampaigns.length === 0 && (
+            <div className="glass p-12 text-center">
+              <div className="w-14 h-14 mx-auto mb-5 rounded-2xl bg-white/[0.04] border border-white/10 flex items-center justify-center text-2xl">✨</div>
+              <p className="text-lg font-semibold text-white">
+                {profileData?.role === 'creator' ? "You haven't posted any projects yet" : "You haven't posted any campaigns yet"}
+              </p>
+              <p className="text-sm text-slate-400 mt-1.5 mb-6">
+                {profileData?.role === 'creator'
+                  ? 'Share a project to start attracting brands.'
+                  : 'Launch a campaign to start attracting creators.'}
+              </p>
+              <button onClick={() => navigate('/projects')} className="btn-primary btn-md">
+                {profileData?.role === 'creator' ? 'Create a project' : 'Create a campaign'}
+              </button>
+            </div>
+          )}
+
+          {/* Recent Partners Section — real accepted collaborations, hidden when empty */}
+          {partners.length > 0 && (
+            <div className="glass p-6 sm:p-8">
+              <div className="text-left mb-7">
+                <p className="eyebrow mb-1">Track record</p>
+                <h2 className="text-2xl font-bold text-white">Recent Partners</h2>
               </div>
-            )}
-          </div>
 
-
-        </div>
-
-        {/* Recent Partners Section */}
-        <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-2xl p-8 backdrop-blur-sm">
-          <h2 className="text-2xl font-bold mb-6 flex items-center gap-2">
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm3.5-9c.83 0 1.5-.67 1.5-1.5S16.33 8 15.5 8 14 8.67 14 9.5s.67 1.5 1.5 1.5zm-7 0c.83 0 1.5-.67 1.5-1.5S9.33 8 8.5 8 7 8.67 7 9.5 7.67 11 8.5 11zm3.5 6.5c2.33 0 4.31-1.46 5.11-3.5H6.89c.8 2.04 2.78 3.5 5.11 3.5z" />
-            </svg>
-            Recent Partners
-          </h2>
-
-          <div className="grid grid-cols-4 gap-4">
-            {['TechCore', 'CreatorPro', 'Lumix Pro', 'StudioTech'].map((partner, idx) => (
-              <div
-                key={idx}
-                className="bg-white/5 border border-white/10 rounded-xl p-4 flex flex-col items-center justify-center gap-3 hover:bg-white/10 transition-all cursor-pointer"
-              >
-                <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-xs font-bold">
-                  {partner[0]}
-                </div>
-                <p className="text-sm font-semibold text-center">{partner}</p>
+              <div className="stagger-children grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {partners.slice(0, 8).map((partner) => (
+                  <div
+                    key={partner.id}
+                    onClick={() => navigate(`/profile/${partner.id}`)}
+                    className="hover-lift glass card-hover p-5 flex flex-col items-center justify-center gap-3 cursor-pointer"
+                  >
+                    <Avatar
+                      src={partner.avatar}
+                      name={partner.display_name}
+                      className="w-12 h-12"
+                      rounded="rounded-xl"
+                    />
+                    <p className="text-sm font-semibold text-center truncate w-full text-white">{partner.display_name || 'Unknown'}</p>
+                    {partner.role && <p className="text-xs text-slate-500 -mt-1 capitalize">{partner.role}</p>}
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
       </div>
 

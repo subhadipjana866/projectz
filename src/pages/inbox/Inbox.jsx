@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { apiFetch } from '../../lib/api';
+import { PageHeader, Segmented, Avatar, EmptyState, PageLoader } from '../../components/ui';
 
 export default function Inbox() {
   const { user } = useAuth();
@@ -18,10 +20,10 @@ export default function Inbox() {
     setLoading(true);
     try {
       const endpoint = activeTab === 'received'
-        ? `/api/collaborations/inbox?userId=${user.id}`
-        : `/api/collaborations/sent?userId=${user.id}`;
+        ? `/api/collaborations/inbox`
+        : `/api/collaborations/sent`;
 
-      const res = await fetch(endpoint);
+      const res = await apiFetch(endpoint);
       const data = await res.json();
       setRequests(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -35,7 +37,7 @@ export default function Inbox() {
   const handleAccept = async (id) => {
     setActionLoading(id);
     try {
-      const res = await fetch(`/api/collaborations/${id}/accept?userId=${user.id}`, { method: 'PATCH' });
+      const res = await apiFetch(`/api/collaborations/${id}/accept`, { method: 'PATCH' });
       if (res.ok) {
         setRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'accepted' } : r));
       }
@@ -49,7 +51,7 @@ export default function Inbox() {
   const handleReject = async (id) => {
     setActionLoading(id);
     try {
-      const res = await fetch(`/api/collaborations/${id}/reject?userId=${user.id}`, { method: 'PATCH' });
+      const res = await apiFetch(`/api/collaborations/${id}/reject`, { method: 'PATCH' });
       if (res.ok) {
         setRequests(prev => prev.map(r => r.id === id ? { ...r, status: 'rejected' } : r));
       }
@@ -62,134 +64,120 @@ export default function Inbox() {
 
   const getStatusBadge = (status) => {
     const styles = {
-      pending: 'bg-amber-500/20 text-amber-300 border-amber-500/30',
-      accepted: 'bg-green-500/20 text-green-300 border-green-500/30',
-      rejected: 'bg-red-500/20 text-red-300 border-red-500/30',
+      pending: 'chip-amber',
+      accepted: 'chip-emerald',
+      rejected: 'chip-rose',
+    };
+    const dots = {
+      pending: 'bg-amber-400 animate-pulse',
+      accepted: 'bg-emerald-400',
+      rejected: 'bg-rose-400',
     };
     return (
-      <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border ${styles[status] || styles.pending}`}>
-        {status === 'pending' && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 mr-1.5 animate-pulse"></span>}
-        {status === 'accepted' && <span className="w-1.5 h-1.5 rounded-full bg-green-400 mr-1.5"></span>}
-        {status === 'rejected' && <span className="w-1.5 h-1.5 rounded-full bg-red-400 mr-1.5"></span>}
+      <span className={styles[status] || styles.pending}>
+        <span className={`w-1.5 h-1.5 rounded-full mr-1.5 ${dots[status] || dots.pending}`} />
         {status.charAt(0).toUpperCase() + status.slice(1)}
       </span>
     );
   };
 
   const getContextLabel = (item) => {
-    if (item.project) return { label: item.project.project_name, type: 'Project', color: 'text-blue-300 bg-blue-500/10 border-blue-500/20' };
-    if (item.campaign) return { label: item.campaign.campaign_name, type: 'Campaign', color: 'text-purple-300 bg-purple-500/10 border-purple-500/20' };
-    return { label: 'General', type: 'Profile', color: 'text-slate-300 bg-white/5 border-white/10' };
+    if (item.project) return { label: item.project.project_name, type: 'Project', chip: 'chip-indigo' };
+    if (item.campaign) return { label: item.campaign.campaign_name, type: 'Campaign', chip: 'chip-violet' };
+    return { label: 'General', type: 'Profile', chip: 'chip-neutral' };
   };
 
   const pendingCount = requests.filter(r => r.status === 'pending').length;
 
   return (
-    <div className="max-w-5xl mx-auto px-8 py-8 pb-24">
+    <div className="max-w-5xl mx-auto w-full px-5 sm:px-8 py-10 pb-24">
       {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-4xl font-bold text-white tracking-tight text-left">Inbox</h1>
-        <p className="mt-2 text-lg text-slate-400 text-left">Manage your collaboration requests.</p>
-      </div>
+      <PageHeader
+        eyebrow="Collaboration requests"
+        title="Inbox"
+        subtitle="Review, accept and manage your collaboration requests."
+        className="mb-8"
+      />
 
       {/* Tabs */}
-      <div className="flex items-center gap-4 mb-8">
-        <div className="bg-[rgba(255,255,255,0.05)] backdrop-blur-md p-1.5 rounded-xl border border-white/10 flex">
-          <button
-            onClick={() => setActiveTab('received')}
-            className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all flex items-center gap-2 ${activeTab === 'received'
-              ? 'bg-[#1152d4] text-white shadow-lg shadow-blue-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-              }`}
-          >
-            Received
-            {activeTab === 'received' && pendingCount > 0 && (
-              <span className="bg-white/20 text-white text-xs font-bold px-2 py-0.5 rounded-full">{pendingCount}</span>
-            )}
-          </button>
-          <button
-            onClick={() => setActiveTab('sent')}
-            className={`px-6 py-2.5 rounded-lg text-sm font-bold transition-all ${activeTab === 'sent'
-              ? 'bg-[#1152d4] text-white shadow-lg shadow-blue-500/20'
-              : 'text-slate-400 hover:text-white hover:bg-white/5'
-              }`}
-          >
-            Sent
-          </button>
-        </div>
+      <div className="mb-8">
+        <Segmented
+          value={activeTab}
+          onChange={setActiveTab}
+          options={[
+            { key: 'received', label: 'Received', badge: activeTab === 'received' ? pendingCount : 0 },
+            { key: 'sent', label: 'Sent' },
+          ]}
+        />
       </div>
 
       {/* Content */}
       {loading ? (
-        <div className="flex justify-center py-20">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
-        </div>
+        <PageLoader />
       ) : requests.length === 0 ? (
-        <div className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-2xl p-16 text-center backdrop-blur-sm">
-          <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-white/5 flex items-center justify-center">
-            <svg className="w-8 h-8 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <EmptyState
+          icon={
+            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
-          </div>
-          <p className="text-slate-400 text-lg font-medium">No {activeTab} requests yet</p>
-          <p className="text-slate-500 text-sm mt-1">
-            {activeTab === 'received' ? 'When someone sends you a collaboration request, it will appear here.' : 'Requests you send will appear here.'}
-          </p>
-        </div>
+          }
+          title={`No ${activeTab} requests yet`}
+          subtitle={activeTab === 'received'
+            ? 'When someone sends you a collaboration request, it will appear here.'
+            : 'Requests you send will appear here.'}
+        />
       ) : (
-        <div className="space-y-4">
+        <div className="stagger-children space-y-4">
           {requests.map(item => {
             const person = activeTab === 'received' ? item.sender : item.receiver;
             const context = getContextLabel(item);
 
             return (
-              <div key={item.id} className="bg-[rgba(255,255,255,0.03)] border border-[rgba(255,255,255,0.05)] rounded-2xl p-6 backdrop-blur-sm hover:bg-[rgba(255,255,255,0.05)] transition-all">
+              <div key={item.id} className="glass card-hover p-6">
                 <div className="flex items-start gap-4">
                   {/* Avatar */}
-                  <div
-                    className="w-12 h-12 rounded-xl overflow-hidden bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center shrink-0 cursor-pointer border border-white/10"
+                  <Avatar
+                    src={person?.avatar}
+                    name={person?.display_name}
+                    className="w-12 h-12"
+                    rounded="rounded-xl"
+                    textSize="text-lg"
                     onClick={() => person && navigate(`/profile/${person.id}`)}
-                  >
-                    {person?.avatar ? (
-                      <img src={person.avatar} alt={person.display_name} className="w-full h-full object-cover" />
-                    ) : (
-                      <span className="text-white text-lg font-bold">{person?.display_name?.[0]?.toUpperCase() || '?'}</span>
-                    )}
-                  </div>
+                  />
 
                   {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-3 mb-1 flex-wrap">
+                  <div className="flex-1 min-w-0 text-left">
+                    <div className="flex items-center gap-3 mb-1.5 flex-wrap">
                       <p
-                        className="font-semibold text-white cursor-pointer hover:text-blue-400 transition-colors"
+                        className="font-semibold text-white cursor-pointer hover:text-primary-300 transition-colors"
                         onClick={() => person && navigate(`/profile/${person.id}`)}
                       >
                         {person?.display_name || 'Unknown User'}
                       </p>
-                      <span className="text-xs text-slate-500 uppercase font-bold">{person?.role}</span>
+                      <span className="text-[11px] text-slate-500 uppercase font-bold tracking-wider">{person?.role}</span>
                       {getStatusBadge(item.status)}
                     </div>
 
                     {/* Context */}
-                    <div className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold border mb-3 ${context.color}`}>
+                    <div className={`${context.chip} mb-3`}>
                       {context.type}: {context.label}
                     </div>
 
                     {/* Message */}
-                    <p className="text-slate-300 text-sm leading-relaxed text-left">{item.message}</p>
+                    <p className="text-slate-300 text-sm leading-relaxed">{item.message}</p>
 
                     {/* Budget & Timeline */}
                     {(item.budget || item.timeline) && (
-                      <div className="flex gap-4 mt-3">
+                      <div className="flex flex-wrap gap-3 mt-3.5">
                         {item.budget && (
-                          <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                            <span className="text-green-400">💰</span>
+                          <div className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 py-1.5">
+                            <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                             <span className="font-medium">{item.budget}</span>
                           </div>
                         )}
                         {item.timeline && (
-                          <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                            <span className="text-blue-400">📅</span>
+                          <div className="inline-flex items-center gap-1.5 text-xs text-slate-300 bg-white/[0.04] border border-white/[0.07] rounded-lg px-2.5 py-1.5">
+                            <svg className="w-3.5 h-3.5 text-primary-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                             <span className="font-medium">{item.timeline}</span>
                           </div>
                         )}
@@ -197,26 +185,26 @@ export default function Inbox() {
                     )}
 
                     {/* Timestamp */}
-                    <p className="text-xs text-slate-500 mt-3">
+                    <p className="text-xs text-slate-500 mt-3.5">
                       {new Date(item.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
                     </p>
                   </div>
 
                   {/* Actions */}
-                  <div className="flex gap-2 shrink-0">
+                  <div className="flex flex-col sm:flex-row gap-2 shrink-0">
                     {activeTab === 'received' && item.status === 'pending' && (
                       <>
                         <button
                           onClick={() => handleAccept(item.id)}
                           disabled={actionLoading === item.id}
-                          className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white text-sm font-semibold rounded-lg transition-all disabled:opacity-50 shadow-lg shadow-green-500/10"
+                          className="btn btn-sm text-white bg-emerald-600 hover:bg-emerald-500 shadow-lg shadow-emerald-500/15 rounded-lg px-4 py-2"
                         >
                           Accept
                         </button>
                         <button
                           onClick={() => handleReject(item.id)}
                           disabled={actionLoading === item.id}
-                          className="px-4 py-2 bg-white/5 hover:bg-red-500/20 border border-white/10 hover:border-red-500/30 text-slate-300 hover:text-red-300 text-sm font-semibold rounded-lg transition-all disabled:opacity-50"
+                          className="btn btn-sm text-slate-300 bg-white/5 border border-white/10 hover:bg-rose-500/15 hover:border-rose-500/30 hover:text-rose-300 rounded-lg px-4 py-2"
                         >
                           Reject
                         </button>
@@ -225,7 +213,7 @@ export default function Inbox() {
                     {item.status === 'accepted' && (
                       <button
                         onClick={() => navigate(`/chat/${item.id}`)}
-                        className="px-4 py-2 bg-[#1152d4] hover:bg-blue-700 text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-blue-500/10 flex items-center gap-2"
+                        className="btn-primary btn-sm rounded-lg px-4 py-2"
                       >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
