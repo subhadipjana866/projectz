@@ -371,66 +371,95 @@ export default function Projects() {
         </button>
       )}
 
-      {/* Create Modal */}
+      {/* Create Modal — styled as an editorial "compose" layout rather than a stacked form */}
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         title={`Create New ${itemNameTitle}`}
         subtitle={activeTab === 'projects' ? 'Share what you are building and attract brand partners.' : 'Launch a campaign and attract the right creators.'}
+        maxWidth="max-w-3xl"
       >
-        <form onSubmit={handleSubmit} className="p-7 space-y-6">
-          {formError && <div className="alert-error !p-3">{formError}</div>}
-          <div>
-            <label className="field-label">{itemNameTitle} Name <span className="text-rose-400">*</span></label>
-            <input required type="text" name="title" value={formData.title} onChange={handleInputChange} className="field" placeholder={`e.g. ${itemNameTitle} Alpha`} />
-          </div>
+        <form onSubmit={handleSubmit} className="flex flex-col">
+          {formError && <div className="alert-error !p-3 mx-7 mt-7">{formError}</div>}
 
-          <div>
-            <label className="field-label">Description</label>
-            <textarea rows="3" name="description" value={formData.description} onChange={handleInputChange} className="field resize-none" placeholder={`What is this ${itemNameTitle.toLowerCase()} about?`}></textarea>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-            <CapsuleSelector
-              label="Target Audience"
-              placeholder="Add audience (e.g., Teenagers, Professionals)..."
-              value={formData.target_aud}
-              onChange={(value) => handleCapsuleChange('target_aud', value)}
-              presetOptions={['Teenagers', 'Adults', 'Professionals', 'Kids', 'Students', 'Gaming Enthusiasts', 'Artists', 'Businesses']}
-            />
-            <CapsuleSelector
-              label="Genre"
-              placeholder="Add genre (e.g., RPG, Productivity)..."
-              value={formData.genre}
-              onChange={(value) => handleCapsuleChange('genre', value)}
-              presetOptions={['Action', 'Adventure', 'RPG', 'Strategy', 'Simulation', 'Casual', 'Puzzle', 'Sports', 'Productivity', 'Education', 'Comedy', 'Drama']}
-            />
-          </div>
-
-          <CapsuleSelector
-            label="Platforms"
-            placeholder="Add platform (e.g., iOS, Android, Web)..."
-            value={formData.platforms}
-            onChange={(value) => handleCapsuleChange('platforms', value)}
-            presetOptions={['iOS', 'Android', 'Web', 'Windows', 'Mac', 'Linux', 'PlayStation', 'Xbox', 'Nintendo Switch']}
-          />
-
-          <div>
-            <label className="field-label">Image <span className="text-slate-500">(optional)</span></label>
-            <div className="flex items-end gap-4">
-              {imagePreview && (
-                <div className="w-24 h-24 rounded-xl overflow-hidden border border-white/10 flex-shrink-0">
-                  <img src={imagePreview} alt="Preview" className="w-full h-full object-cover" />
+          {/* Cover image */}
+          <label className="relative block mx-7 mt-7 h-52 sm:h-60 rounded-2xl border-2 border-dashed border-white/15 hover:border-primary-500/50 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer overflow-hidden group shrink-0">
+            <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+            {imagePreview ? (
+              <>
+                <img src={imagePreview} alt="Cover preview" className="w-full h-full object-cover" />
+                <div className="absolute inset-0 bg-ink-950/0 group-hover:bg-ink-950/60 transition-colors flex items-center justify-center">
+                  <span className="opacity-0 group-hover:opacity-100 transition-opacity text-white text-sm font-semibold flex items-center gap-2">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                    Change cover image
+                  </span>
                 </div>
-              )}
-              <label className="flex-1 field cursor-pointer hover:bg-white/[0.07] text-center text-sm font-medium text-slate-300 hover:text-white">
-                <input type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
-                {formData.imageFile ? 'Change Image' : 'Choose Image'}
-              </label>
-            </div>
+              </>
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center gap-2 text-slate-500 group-hover:text-primary-300 transition-colors">
+                <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.4} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+                <span className="text-sm font-semibold">Add a cover image</span>
+                <span className="text-xs text-slate-600">Optional — helps your {itemNameTitle.toLowerCase()} stand out</span>
+              </div>
+            )}
+          </label>
+
+          {/* Title + description, editorial style */}
+          <div className="px-7 pt-8">
+            <p className="eyebrow mb-3">{itemNameTitle} Details</p>
+            <input
+              required
+              type="text"
+              name="title"
+              value={formData.title}
+              onChange={handleInputChange}
+              placeholder={`${itemNameTitle} title…`}
+              className="w-full bg-transparent outline-none text-3xl font-display font-bold text-white placeholder-slate-600 border-b border-white/10 focus:border-primary-500/60 pb-3 transition-colors"
+            />
+            <textarea
+              rows="3"
+              name="description"
+              value={formData.description}
+              onChange={handleInputChange}
+              placeholder={`Tell brand partners what this ${itemNameTitle.toLowerCase()} is about…`}
+              className="w-full bg-transparent outline-none resize-none text-slate-300 text-lg leading-relaxed placeholder-slate-600 mt-5"
+            ></textarea>
           </div>
 
-          <div className="pt-6 border-t border-white/10 flex justify-end gap-3 pb-1">
+          {/* Tags / metadata */}
+          <div className="mx-7 mt-6 mb-7 p-6 rounded-2xl bg-white/[0.02] border border-white/[0.06] space-y-6">
+            <p className="eyebrow">Audience &amp; Tags</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              <CapsuleSelector
+                label="Target Audience"
+                placeholder="Add audience (e.g., Teenagers, Professionals)..."
+                value={formData.target_aud}
+                onChange={(value) => handleCapsuleChange('target_aud', value)}
+                presetOptions={['Teenagers', 'Adults', 'Professionals', 'Kids', 'Students', 'Gaming Enthusiasts', 'Artists', 'Businesses']}
+              />
+              <CapsuleSelector
+                label="Genre"
+                placeholder="Add genre (e.g., RPG, Productivity)..."
+                value={formData.genre}
+                onChange={(value) => handleCapsuleChange('genre', value)}
+                presetOptions={['Action', 'Adventure', 'RPG', 'Strategy', 'Simulation', 'Casual', 'Puzzle', 'Sports', 'Productivity', 'Education', 'Comedy', 'Drama']}
+              />
+            </div>
+
+            <CapsuleSelector
+              label="Platforms"
+              placeholder="Add platform (e.g., iOS, Android, Web)..."
+              value={formData.platforms}
+              onChange={(value) => handleCapsuleChange('platforms', value)}
+              presetOptions={['iOS', 'Android', 'Web', 'Windows', 'Mac', 'Linux', 'PlayStation', 'Xbox', 'Nintendo Switch']}
+            />
+          </div>
+
+          <div className="px-7 py-5 border-t border-white/10 flex justify-end gap-3">
             <button type="button" onClick={() => setIsModalOpen(false)} className="btn-secondary btn-md">Cancel</button>
             <button type="submit" disabled={submitting} className="btn-primary btn-md">
               {submitting && <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>}
